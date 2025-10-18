@@ -1,0 +1,58 @@
+ngrok config add-authtoken 21D9DSNrQHYcaQvw0yGN8KeaN9m_2n14Wm7ow8HyEHJNQ7pYG
+ngrok http 8501
+
+streamlit run Travel_Chat_Bot &>/dev/null&
+
+# api
+openweathermap: 89fb4e8431599d5dba5e5d53a3fe4162
+
+# authtoken
+ngrok config add-authtoken 21D9DSNrQHYcaQvw0yGN8KeaN9m_2n14Wm7ow8HyEHJNQ7pYG
+ngrok.exe http 8501
+
+Du lịch đà nẵng từ 20 tháng 10 đến 23 tháng 10
+
+Date: 18/10/2025
+--> Hiện tại do hạn chế về API nên chỉ có thể dự báo thời tiết trong 5 ngày
+--> Không có thông tin về địa điểm du lịch, đánh giá do ko có api google places
+
+Dự định tiếp theo:
+📱 12. Chế độ “Gợi ý cá nhân hóa” (có nhớ người dùng)
+Lưu thông tin người dùng:
+Thành phố đang sống, sở thích (biển, núi, ẩm thực…)
+Khi hỏi: “Cuối tuần này nên đi đâu?” → AI dựa vào sở thích để gợi ý.
+Tạo Profile: lưu lịch sử từng người dùng
+
+
+🧭 1️⃣ Trải nghiệm người dùng (UI/UX)
+🗣️ 1. Chat giọng nói (Speech-to-Text & Text-to-Speech)
+Người dùng nói chuyện trực tiếp với chatbot.
+Sử dụng:
+import streamlit_mic_recorder
+hoặc API gTTS / whisper để chuyển giọng nói ↔ văn bản.
+Giao diện có nút 🎤 “Nhấn để nói”.
+
+pip install SpeechRecognition streamlit streamlit-mic-recorder gTTS
+Cài chocolatey: https://chocolatey.org/install
+# mở powershell với quyền admin
+Set-ExecutionPolicy Bypass -Scope Process -Force; `
+[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; `
+iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+# chạy lệnh
+choco install ffmpeg
+ffmpeg -version
+# Cài Python helper:
+# pydub dùng ffmpeg làm backend.
+pip install pydub SpeechRecognition
+
+
+💾 2. Lưu lịch sử hội thoại & chia sẻ
+Cho phép người dùng lưu lại hành trình tư vấn thành file .pdf hoặc .txt.
+Dùng st.download_button("📥 Tải bản tư vấn", data=...).
+
+🧍‍♂️ 3. Chế độ "Hướng dẫn viên cá nhân"
+Người dùng chọn phong cách hướng dẫn viên:
+“Alex – chuyên nghiệp lịch sự”
+“Mai – vui tính thân thiện”
+“Ken – thích khám phá bụi bặm”
+→ thay đổi giọng văn, biểu cảm emoji, và tone trả lời.
