@@ -31,12 +31,12 @@ import time
 # -------------------------
 # CONFIG / SECRETS
 # -------------------------
-OPENAI_API_KEY = st.secrets["openai"]["OPENAI_API_KEY"]
-OPENAI_ENDPOINT = st.secrets["openai"].get("OPENAI_ENDPOINT", "https://api.openai.com/v1")
-DEPLOYMENT_NAME = st.secrets["openai"].get("DEPLOYMENT_NAME", "gpt-4o-mini")
-OPENWEATHERMAP_API_KEY = st.secrets["weather"]["OPENWEATHERMAP_API_KEY"]
-GOOGLE_PLACES_KEY = st.secrets.get("google", {}).get("PLACES_API_KEY", None)
-PIXABAY_API_KEY = st.secrets.get("pixabay", {}).get("PIXABAY_API_KEY", None)
+OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
+OPENAI_ENDPOINT = st.secrets.get("OPENAI_ENDPOINT", "https://api.openai.com/v1")
+DEPLOYMENT_NAME = st.secrets.get("DEPLOYMENT_NAME", "gpt-4o-mini")
+OPENWEATHERMAP_API_KEY = st.secrets["OPENWEATHERMAP_API_KEY"]
+GOOGLE_PLACES_KEY = st.secrets["PLACES_API_KEY"]
+PIXABAY_API_KEY = st.secrets["PIXABAY_API_KEY"]
 
 client = openai.OpenAI(base_url=OPENAI_ENDPOINT, api_key=OPENAI_API_KEY)
 
