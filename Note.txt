@@ -1,6 +1,9 @@
 ngrok config add-authtoken 21D9DSNrQHYcaQvw0yGN8KeaN9m_2n14Wm7ow8HyEHJNQ7pYG
 ngrok http 8501
 
+#Tự động tạo file requirements.txt
+pip freeze > requirements.txt
+
 streamlit run Travel_Chat_Bot &>/dev/null&
 
 # api

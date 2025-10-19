@@ -1,19 +1,7 @@
-# Travel_Chat_Bot_Enhanced_Hybrid_FoodAI_Pixabay.py
-# Streamlit travel chatbot (final tabs version)
-# - Two tabs: Chatbot Du lịch & Thống kê truy vấn
-# - Pixabay for images (requires PIXABAY_API_KEY in .streamlit/secrets.toml)
-# - Hybrid restaurants: Google Places + CSV fallback
-# - Food AI Assistant: CSV local foods + GPT fallback
-# - Weather: OpenWeatherMap
-# - Map: Carto Positron style (no API key required)
-# - Zoom slider in sidebar, use_container_width for images
-# - Logging to SQLite, analytics tab with metric + table
-#
-# Requirements:
-# pip install streamlit openai requests geopy pandas pydeck
-
-# Travel_Chat_Bot_Enhanced.py (bản đã cập nhật)
-# Bổ sung AI tự động nhận diện số ngày từ người dùng (extract_days_from_text)
+# Travel_Chat_Bot_Enhanced_UI_FULL_with_Hero.py
+# Phiên bản hoàn chỉnh (giữ nguyên logic gốc) + cải tiến UX/UI
+# Thêm Header / Hero Section để tạo cảm giác "App du lịch thật sự"
+# Yêu cầu: streamlit, openai, requests, geopy, pandas, pydeck, plotly, sqlite3
 
 import streamlit as st
 import openai
@@ -27,29 +15,125 @@ import sqlite3
 import pydeck as pdk
 import re
 import time
+import plotly.express as px
+
+# -------------------------
+# PAGE CONFIG & THEME
+# -------------------------
+st.set_page_config(page_title="🤖 [Mây Lang Thang] - Travel Assistant", layout="wide", page_icon="🌴")
+
+# Global CSS + UI tweaks (including hero styles)
+st.markdown(
+    """
+    <style>
+    :root{
+      --primary:#2b4c7e;
+      --accent:#e7f3ff;
+      --muted:#f2f6fa;
+    }
+    body {
+      background: linear-gradient(90deg, #f8fbff 0%, #eef5fa 100%);
+      font-family: 'Segoe UI', Roboto, Arial, sans-serif;
+    }
+    .stApp > header {visibility: hidden;}
+    h1, h2, h3 { color: var(--primary); }
+    .sidebar-card { background-color:#f1f9ff; padding:10px; border-radius:10px; margin-bottom:8px;}
+    .user-message { background: #f2f2f2; padding:10px; border-radius:12px; }
+    .assistant-message { background: #e7f3ff; padding:10px; border-radius:12px; }
+    .pill-btn { border-radius:999px !important; background:#e3f2fd !important; color:var(--primary) !important; padding:6px 12px; border: none; }
+    .status-ok { background:#d4edda; padding:8px; border-radius:8px; }
+    .status-bad { background:#f8d7da; padding:8px; border-radius:8px; }
+    .small-muted { color: #6b7280; font-size:12px; }
+    .logo-title { display:flex; align-items:center; gap:10px; }
+    .logo-title h1 { margin:0; }
+    .assistant-bubble {
+    background-color: #e7f3ff; /* xanh nhạt */
+    padding: 12px 16px;
+    border-radius: 15px;
+    margin-bottom: 6px;
+    }
+    .user-message {
+    background-color: #f2f2f2;
+    padding: 12px 16px;
+    border-radius: 15px;
+    margin-bottom: 6px;
+    }
+
+    /* HERO */
+    .hero {
+      position: relative;
+      border-radius: 16px;
+      overflow: hidden;
+      box-shadow: 0 8px 30px rgba(43,76,126,0.12);
+      margin-bottom: 18px;
+    }
+    .hero__bg {
+      width: 100%;
+      height: 320px;
+      object-fit: cover;
+      filter: brightness(0.65) saturate(1.05);
+    }
+    .hero__overlay {
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .hero__card {
+      background: linear-gradient(90deg, rgba(255,255,255,0.02), rgba(255,255,255,0.08));
+      backdrop-filter: blur(6px);
+      border-radius: 12px;
+      padding: 18px;
+      width: 100%;
+      max-width: 980px;
+      color: white;
+    }
+    .hero__title { font-size: 28px; font-weight:700; margin:0 0 6px 0; color: #fff; }
+    .hero__subtitle { margin:0 0 12px 0; color: #f0f6ff; }
+    .hero__cta { display:flex; gap:8px; align-items:center; }
+
+    @media (max-width: 768px) {
+      .hero__bg { height: 220px; }
+      .hero__title { font-size: 20px; }
+    }
+
+    </style>
+    """, unsafe_allow_html=True
+)
 
 # -------------------------
 # CONFIG / SECRETS
 # -------------------------
-OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
-OPENAI_ENDPOINT = st.secrets.get("OPENAI_ENDPOINT", "https://api.openai.com/v1")
-DEPLOYMENT_NAME = st.secrets.get("DEPLOYMENT_NAME", "gpt-4o-mini")
-OPENWEATHERMAP_API_KEY = st.secrets["OPENWEATHERMAP_API_KEY"]
-GOOGLE_PLACES_KEY = st.secrets["PLACES_API_KEY"]
-PIXABAY_API_KEY = st.secrets["PIXABAY_API_KEY"]
+# These must be set in Streamlit secrets (or env) exactly as used previously
+try:
+    OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
+except Exception:
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", None)
+OPENAI_ENDPOINT = st.secrets.get("OPENAI_ENDPOINT", "https://api.openai.com/v1") if hasattr(st, 'secrets') else os.getenv("OPENAI_ENDPOINT", "https://api.openai.com/v1")
+DEPLOYMENT_NAME = st.secrets.get("DEPLOYMENT_NAME", "gpt-4o-mini") if hasattr(st, 'secrets') else os.getenv("DEPLOYMENT_NAME", "gpt-4o-mini")
+OPENWEATHERMAP_API_KEY = st.secrets.get("OPENWEATHERMAP_API_KEY", "") if hasattr(st, 'secrets') else os.getenv("OPENWEATHERMAP_API_KEY", "")
+GOOGLE_PLACES_KEY = st.secrets.get("PLACES_API_KEY", "") if hasattr(st, 'secrets') else os.getenv("PLACES_API_KEY", "")
+PIXABAY_API_KEY = st.secrets.get("PIXABAY_API_KEY", "") if hasattr(st, 'secrets') else os.getenv("PIXABAY_API_KEY", "")
 
-client = openai.OpenAI(base_url=OPENAI_ENDPOINT, api_key=OPENAI_API_KEY)
+# Initialize OpenAI client (using openai Python SDK modern interface)
+if OPENAI_API_KEY:
+    client = openai.OpenAI(base_url=OPENAI_ENDPOINT, api_key=OPENAI_API_KEY)
+else:
+    client = None
 
-ChatBotName = "[Mây Lang Thang]" #Mây Lang Thang
+ChatBotName = "[Mây Lang Thang]"  # display name
 system_prompt = """
 Bạn là Hướng dẫn viên du lịch ảo Alex - người kể chuyện, am hiểu văn hóa, lịch sử, ẩm thực và thời tiết Việt Nam.
 Luôn đưa ra thông tin hữu ích, gợi ý lịch trình, món ăn, chi phí, thời gian lý tưởng, sự kiện và góc chụp ảnh.
 """
 
 # -------------------------
-# DB LOGGING
+# DB LOGGING (SQLite)
 # -------------------------
 DB_PATH = "travel_chatbot_logs.db"
+
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
@@ -67,6 +151,8 @@ def init_db():
     conn.commit()
     conn.close()
 
+init_db()
+
 def log_interaction(user_input, city=None, start_date=None, end_date=None, intent=None):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
@@ -80,23 +166,24 @@ def log_interaction(user_input, city=None, start_date=None, end_date=None, inten
     conn.commit()
     conn.close()
 
-init_db()
-
 # -------------------------
-# Hàm mới: Phân tích số ngày tự động
+# UTILITIES: days extraction (original logic)
 # -------------------------
 def extract_days_from_text(user_text, start_date=None, end_date=None):
     """
     Phân tích số ngày từ câu hỏi người dùng.
     Ưu tiên tính từ start_date, end_date nếu có.
-    Nếu không, dùng AI hoặc regex để suy luận ('1 tuần', '3 ngày', ...)
+    Nếu không, dùng regex / AI fallback.
     """
-    # Nếu có ngày bắt đầu & kết thúc => tính chênh lệch
+    # If start & end provided, compute days
     if start_date and end_date:
-        delta = (end_date - start_date).days + 1
-        return max(delta, 1)
+        try:
+            delta = (end_date - start_date).days + 1
+            return max(delta, 1)
+        except Exception:
+            pass
 
-    # Thử tìm "X ngày" hoặc "X tuần"
+    # Try regex for 'X ngày' or 'X tuần'
     m = re.search(r"(\d+)\s*(ngày|day|days|tuần|week|weeks)", user_text, re.IGNORECASE)
     if m:
         num = int(m.group(1))
@@ -105,43 +192,32 @@ def extract_days_from_text(user_text, start_date=None, end_date=None):
             return num * 7
         return num
 
-    # Nếu không có, thử hỏi AI
-    try:
-        prompt = f"""
+    # AI fallback (if client available)
+    if client:
+        try:
+            prompt = f"""
 Bạn là một bộ phân tích ngữ nghĩa tiếng Việt & tiếng Anh.
 Xác định người dùng muốn nói bao nhiêu ngày trong câu sau, nếu không có thì mặc định 3:
 Trả về JSON: {{"days": <số nguyên>}}
 Câu: "{user_text}"
 """
-        response = client.chat.completions.create(
-            model=DEPLOYMENT_NAME,
-            messages=[{"role": "system", "content": prompt}],
-            max_tokens=50,
-            temperature=0
-        )
-        text = response.choices[0].message.content.strip()
-        num_match = re.search(r'"days"\s*:\s*(\d+)', text)
-        if num_match:
-            return int(num_match.group(1))
-    except Exception:
-        pass
+            response = client.chat.completions.create(
+                model=DEPLOYMENT_NAME,
+                messages=[{"role": "system", "content": prompt}],
+                max_tokens=50,
+                temperature=0
+            )
+            text = response.choices[0].message.content.strip()
+            num_match = re.search(r'"days"\s*:\s*(\d+)', text)
+            if num_match:
+                return int(num_match.group(1))
+        except Exception:
+            pass
 
     return 3  # fallback
 
 # -------------------------
-# GEOCODING & MAPS, WEATHER, ... (các phần còn lại giữ nguyên)
-# -------------------------
-# (Phần code gốc từ file Travel_Chat_Bot_Enhanced.py sẽ tiếp tục như ban đầu, chỉ cần thay đổi đoạn gọi estimate_cost)
-
-# Trong phần xử lý user_input:
-# city_guess, start_date, end_date = extract_city_and_dates(user_input)
-# days = extract_days_from_text(user_input, start_date, end_date)
-# if city_guess and "Cost" in info_options:
-#     blocks.append(estimate_cost(city_guess, days=days))
-init_db()
-
-# -------------------------
-# GEOCODING & MAPS (Carto Positron style)
+# GEOCODING & MAPS
 # -------------------------
 geolocator = Nominatim(user_agent="travel_chatbot_app")
 
@@ -160,7 +236,6 @@ def show_map(lat, lon, zoom=8, title=""):
         return
 
     st.write(f"**Vị trí:** {title} ({lat:.5f}, {lon:.5f})")
-
     view = pdk.ViewState(latitude=lat, longitude=lon, zoom=zoom)
 
     layer = pdk.Layer(
@@ -181,96 +256,98 @@ def show_map(lat, lon, zoom=8, title=""):
     st.pydeck_chart(deck)
 
 # -------------------------
-# WEATHER (OpenWeatherMap)
+# WEATHER (OpenWeatherMap) with AI fallback on location
 # -------------------------
-# def get_weather_forecast(city_name, start_date=None, end_date=None):
-#     try:
-#         url = f"http://api.openweathermap.org/data/2.5/forecast?q={city_name}&appid={OPENWEATHERMAP_API_KEY}&lang=vi&units=metric"
-#         response = requests.get(url, timeout=10)
-#         data = response.json()
-#         if data.get("cod") != "200":
-#             return f"❌ Không tìm thấy thông tin dự báo thời tiết cho địa điểm: **{city_name}**."
-#         forecast_text = f"🌤 **Dự báo thời tiết cho {city_name}:**\n"
-#         if start_date and end_date:
-#             current = start_date
-#             while current <= end_date:
-#                 date_str = current.strftime("%Y-%m-%d")
-#                 day_forecasts = [f for f in data['list'] if f['dt_txt'].startswith(date_str)]
-#                 if not day_forecasts:
-#                     forecast_text += f"\n📅 {current.strftime('%d/%m/%Y')}: Không có dữ liệu dự báo.\n"
-#                 else:
-#                     temps = [f['main']['temp'] for f in day_forecasts]
-#                     desc = day_forecasts[0]['weather'][0]['description']
-#                     forecast_text += (
-#                         f"\n📅 {current.strftime('%d/%m/%Y')} - {desc.capitalize()}\n"
-#                         f"🌡 Nhiệt độ trung bình: {sum(temps)/len(temps):.1f}°C\n"
-#                     )
-#                 current += timedelta(days=1)
-#         else:
-#             first_forecast = data['list'][0]
-#             desc = first_forecast['weather'][0]['description'].capitalize()
-#             temp = first_forecast['main']['temp']
-#             forecast_text += f"- Hiện tại: {desc}, {temp}°C\n"
-#         return forecast_text
-#     except Exception as e:
-#         return f"⚠️ Lỗi khi lấy dữ liệu thời tiết: {e}"
+def resolve_city_via_ai(user_text):
+    """
+    Dùng AI để xác định tỉnh/thành nếu OpenWeather không trả kết quả
+    """
+    if not client:
+        return None
+    try:
+        prompt = f"""
+Bạn là chuyên gia địa lý du lịch Việt Nam.
+Phân tích câu sau để xác định:
+1. 'place': địa danh cụ cụ thể (khu du lịch, công viên, đảo, thắng cảnh,...)
+2. 'province_or_city': tên tỉnh hoặc thành phố của Việt Nam mà địa danh đó thuộc về.
+
+Nếu không xác định được, trả về null.
+
+Kết quả JSON ví dụ:
+{{"place": "Phong Nha - Kẻ Bàng", "province_or_city": "Quảng Bình"}}
+
+Câu: "{user_text}"
+"""
+        response = client.chat.completions.create(
+            model=DEPLOYMENT_NAME,
+            messages=[{"role": "system", "content": prompt}],
+            max_tokens=200,
+            temperature=0
+        )
+        text = response.choices[0].message.content.strip()
+        start, end = text.find("{"), text.rfind("}")
+        if start == -1 or end == -1:
+            return None
+        data = json.loads(text[start:end+1])
+        return data.get("province_or_city")
+    except Exception:
+        return None
 
 def get_weather_forecast(city_name, start_date=None, end_date=None, user_text=None):
     """
-    Lấy dự báo thời tiết. Nếu không tìm thấy địa điểm, dùng AI để xác định
-    tỉnh/thành tương ứng rồi thử lại.
+    Lấy dự báo thời tiết (5 ngày) từ OpenWeatherMap.
+    Nếu không tìm thấy, thử dùng AI để đoán tỉnh/thành rồi thử lại.
     """
+    if not OPENWEATHERMAP_API_KEY:
+        return "⚠️ Thiếu OpenWeatherMap API Key."
+
     try:
         def _fetch_weather(city):
-            url = f"http://api.openweathermap.org/data/2.5/forecast?q={city},VN&appid={OPENWEATHERMAP_API_KEY}&lang=vi&units=metric"
-            response = requests.get(url, timeout=10)
+            url = f"http://api.openweathermap.org/data/2.5/forecast?q={city}&appid={OPENWEATHERMAP_API_KEY}&lang=vi&units=metric"
+            response = requests.get(url, timeout=8)
             return response.json()
 
         data = _fetch_weather(city_name)
 
-        # Nếu không có dữ liệu, thử dùng AI xác định lại tỉnh/thành
+        # Try fallback via AI if not found
         if data.get("cod") != "200" and user_text:
             ai_city = resolve_city_via_ai(user_text)
             if ai_city and ai_city.lower() != city_name.lower():
-                st.info(f"🤖 Không tìm thấy thời tiết cho '{city_name}', thử với '{ai_city}' ...")
-                data = _fetch_weather(ai_city)
+                data = _fetch_weather(f"{ai_city},VN")
                 city_name = ai_city
 
         if data.get("cod") != "200":
             return f"❌ Không tìm thấy thông tin dự báo thời tiết cho địa điểm: **{city_name}**."
 
-        forecast_text = f"🌤 **Dự báo thời tiết cho {city_name}:**\\n"
-
+        forecast_text = f"🌤 **Dự báo thời tiết cho {city_name}:**\n"
         if start_date and end_date:
             current = start_date
             while current <= end_date:
                 date_str = current.strftime("%Y-%m-%d")
                 day_forecasts = [f for f in data['list'] if f['dt_txt'].startswith(date_str)]
                 if not day_forecasts:
-                    forecast_text += f"\\n📅 {current.strftime('%d/%m/%Y')}: Không có dữ liệu dự báo.\\n"
+                    forecast_text += f"\n📅 {current.strftime('%d/%m/%Y')}: Không có dữ liệu dự báo.\n"
                 else:
                     temps = [f['main']['temp'] for f in day_forecasts]
                     desc = day_forecasts[0]['weather'][0]['description']
                     forecast_text += (
-                        f"\\n📅 {current.strftime('%d/%m/%Y')} - {desc.capitalize()}\\n"
-                        f"🌡 Nhiệt độ trung bình: {sum(temps)/len(temps):.1f}°C\\n"
+                        f"\n📅 {current.strftime('%d/%m/%Y')} - {desc.capitalize()}\n"
+                        f"🌡 Nhiệt độ trung bình: {sum(temps)/len(temps):.1f}°C\n"
                     )
                 current += timedelta(days=1)
         else:
             first_forecast = data['list'][0]
             desc = first_forecast['weather'][0]['description'].capitalize()
             temp = first_forecast['main']['temp']
-            forecast_text += f"- Hiện tại: {desc}, {temp}°C\\n"
+            forecast_text += f"- Hiện tại: {desc}, {temp}°C\n"
 
         return forecast_text
 
     except Exception as e:
         return f"⚠️ Lỗi khi lấy dữ liệu thời tiết: {e}"
 
-
-
 # -------------------------
-# PIXABAY IMAGE SYSTEM
+# PIXABAY IMAGE FUNCTIONS
 # -------------------------
 def get_pixabay_image(query, per_page=3):
     if not PIXABAY_API_KEY:
@@ -319,7 +396,7 @@ def get_food_images(food_list):
     return images
 
 # -------------------------
-# RESTAURANTS HYBRID (Google Places + CSV)
+# RESTAURANTS HYBRID (Google Places + CSV fallback)
 # -------------------------
 def get_restaurants_google(city, api_key, limit=5):
     try:
@@ -389,6 +466,8 @@ def get_local_foods(city):
     return []
 
 def get_foods_via_gpt(city, max_items=5):
+    if not client:
+        return []
     try:
         prompt = (
             f"You are an expert on Vietnamese cuisine.\n"
@@ -414,7 +493,7 @@ def get_local_foods_with_fallback(city):
     return foods
 
 # -------------------------
-# SUGGESTIONS / COST / PHOTOSPOTS (no itinerary)
+# SUGGESTIONS / COST / PHOTOSPOTS
 # -------------------------
 def estimate_cost(city, days=3, people=1, style="trung bình"):
     mapping = {"tiết kiệm": 400000, "trung bình": 800000, "cao cấp": 2000000}
@@ -423,7 +502,7 @@ def estimate_cost(city, days=3, people=1, style="trung bình"):
     return f"💸 Chi phí ước tính: khoảng {total:,} VNĐ cho {people} người, {days} ngày."
 
 def suggest_local_food(city):
-    return f"🍜 Yêu cầu 'Đặc sản' để nhận danh sách món ăn nổi bật của {city}."
+    return f"🍜 Gõ 'Đặc sản {city}' để nhận danh sách món ăn nổi bật."
 
 def suggest_events(city):
     return f"🎉 Sự kiện ở {city}: lễ hội địa phương, chợ đêm, hội chợ ẩm thực (tuỳ mùa)."
@@ -435,6 +514,12 @@ def suggest_photospots(city):
 # BILINGUAL CITY & DATE EXTRACTION
 # -------------------------
 def extract_city_and_dates(user_text):
+    """
+    Dùng AI để trích xuất city, start_date, end_date.
+    Nếu thất bại, trả về None.
+    """
+    if not client:
+        return None, None, None
     try:
         prompt = f"""
 You are a multilingual travel information extractor.
@@ -470,8 +555,7 @@ Message: "{user_text}"
             if not d:
                 return None
             dt = datetime.strptime(d, "%Y-%m-%d")
-            if dt.year < datetime.now().year:
-                dt = dt.replace(year=datetime.now().year)
+            # if past year given without context, keep as is
             return dt
         start_dt = _parse(s)
         end_dt = _parse(e)
@@ -481,48 +565,161 @@ Message: "{user_text}"
     except Exception:
         return None, None, None
 
-def resolve_city_via_ai(user_text):
-    """
-    Phân tích địa danh trong câu người dùng và xác định tỉnh/thành tương ứng.
-    Dùng AI để nhận diện — không cần danh sách thủ công.
-    """
+# -------------------------
+# AI suggestions generator (keeps as python list)
+# -------------------------
+def generate_ai_suggestions():
     try:
         prompt = f"""
-Bạn là chuyên gia địa lý du lịch Việt Nam.
-Phân tích câu sau để xác định:
-1. 'place': địa danh cụ thể (khu du lịch, công viên, đảo, thắng cảnh,...)
-2. 'province_or_city': tên tỉnh hoặc thành phố của Việt Nam mà địa danh đó thuộc về.
-
-Nếu không xác định được, trả về null.
-
-Kết quả JSON ví dụ:
-{{"place": "Phong Nha - Kẻ Bàng", "province_or_city": "Quảng Trị"}}
-
-Câu: "{user_text}"
+Bạn là {ChatBotName} – {system_prompt.strip()}
+Hãy tạo 4 câu hỏi gợi ý (ngắn gọn, thân thiện) để người dùng có thể hỏi bạn.
+Trả về dưới dạng danh sách (list) các chuỗi.
 """
-        response = client.chat.completions.create(
-            model=DEPLOYMENT_NAME,
-            messages=[{"role": "system", "content": prompt}],
-            max_tokens=200,
-            temperature=0
-        )
-        text = response.choices[0].message.content.strip()
-        start, end = text.find("{"), text.rfind("}")
-        if start == -1 or end == -1:
-            return None
-        data = json.loads(text[start:end+1])
-        return data.get("province_or_city")
+        if client:
+            response = client.chat.completions.create(
+                model=DEPLOYMENT_NAME,
+                messages=[{"role":"system","content":prompt}],
+                max_tokens=200,
+                temperature=0.7
+            )
+            text = response.choices[0].message.content.strip()
+
+            # Try parse JSON list
+            try:
+                data = json.loads(text)
+                if isinstance(data, list) and all(isinstance(x, str) for x in data):
+                    return [s.strip() for s in data][:4]
+            except Exception:
+                pass
+
+            m = re.search(r'\[.*\]', text, re.DOTALL)
+            if m:
+                list_text = m.group(0)
+                try:
+                    fixed = list_text.replace("'", '"')
+                    data = json.loads(fixed)
+                    if isinstance(data, list):
+                        return [s.strip() for s in data if isinstance(s, str)][:4]
+                except Exception:
+                    inner = list_text[1:-1]
+                    parts = [p.strip().strip(' "\'') for p in inner.split(',') if p.strip()]
+                    parts = [p if p.endswith('?') else p + '?' for p in parts]
+                    return parts[:4]
+
+            # fallback parsing by lines
+            lines = [l.strip() for l in re.split(r'[\r\n]+', text) if l.strip()]
+            parts = []
+            if len(lines) > 1:
+                for l in lines:
+                    if ',' in l and len(l.split(',')) > 1:
+                        for p in l.split(','):
+                            p = p.strip().strip('"-• ')
+                            if p:
+                                parts.append(p if p.endswith('?') else p + '?')
+                    else:
+                        subs = [s.strip() for s in l.split('?') if s.strip()]
+                        for s in subs:
+                            parts.append(s + '?')
+            else:
+                single = lines[0] if lines else text
+                if ',' in single:
+                    items = [p.strip().strip('"\'') for p in single.split(',') if p.strip()]
+                    parts = [p if p.endswith('?') else p + '?' for p in items]
+                else:
+                    subs = [s.strip() for s in re.split(r'\?|•|-', single) if s.strip()]
+                    parts = [s + '?' for s in subs]
+
+            clean = []
+            for p in parts:
+                if p and p not in clean:
+                    clean.append(p)
+                if len(clean) >= 4:
+                    break
+            if clean:
+                return clean[:4]
     except Exception:
-        return None
+        pass
+
+    # fallback static suggestions
+    return [
+        "Thời tiết ở Đà Nẵng tuần tới?",
+        "Top món ăn ở Huế?",
+        "Lịch trình 3 ngày ở Nha Trang?",
+        "Có sự kiện gì ở Hà Nội tháng 12?"
+    ]
+
+# ensure suggestions stored
+if "suggested_questions" not in st.session_state:
+    st.session_state.suggested_questions = generate_ai_suggestions()
+
+# -------------------------
+# HERO / HEADER SECTION
+# -------------------------
+
+def render_hero_section(default_city_hint="Hội An, Đà Nẵng, Hà Nội..."):
+    # Use a fixed Unsplash hero image (static fallback only)
+    hero_img = "https://images.unsplash.com/photo-1633073985249-b2d67bdf6b7d?ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D&auto=format&fit=crop&q=80&w=1074"
+
+    # Hero markup using background-image on a full-width div so the image covers entire hero area
+    st.markdown(f"""
+    <div class='hero' style="background-image: url('{hero_img}'); background-size: cover; background-position: center; background-repeat: no-repeat; height:200px;">
+      <div class='hero__overlay'>
+        <div class='hero__card'>
+          <div style='display:flex; align-items:center; justify-content:space-between; gap:12px;'>
+            <div style='flex:1'>
+              <h1 class='hero__title'>Khám phá Việt Nam cùng Mây Lang Thang</h1>
+              <p class='hero__subtitle'>Gợi ý lịch trình, món ăn, dự báo thời tiết. Nhập điểm đến, chọn ngày và bắt đầu cuộc hành trình!</p>
+            </div>
+            <div style='min-width:260px; text-align:right;'>
+              <span style='font-size:14px; opacity:0.95'>🌤️ Tìm nhanh & gợi ý tức thì</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # form below hero for inputs
+    with st.form(key='hero_search_form', clear_on_submit=False):
+        cols = st.columns([3,2,1,1])
+        dest = cols[0].text_input("Điểm đến", placeholder=default_city_hint)
+        dates = cols[1].date_input("Ngày (bắt đầu / kết thúc)", [])
+        people = cols[2].selectbox("Người", [1,2,3,4,5,6], index=0)
+        style = cols[3].selectbox("Mức chi", ["trung bình", "tiết kiệm", "cao cấp"], index=0)
+        submitted = st.form_submit_button("Tìm kiếm nhanh", use_container_width=True)
+
+        if submitted:
+            # Build a friendly query that existing pipeline understands
+            if isinstance(dates, list) and len(dates) == 2:
+                s = dates[0].strftime("%Y-%m-%d")
+                e = dates[1].strftime("%Y-%m-%d")
+                q = f"Lịch trình { ( (dates[1]-dates[0]).days +1 ) } ngày ở {dest} từ {s} đến {e}"
+            elif isinstance(dates, list) and len(dates) == 1:
+                s = dates[0].strftime("%Y-%m-%d")
+                q = f"Lịch trình 1 ngày ở {dest} vào {s}"
+            else:
+                q = f"Lịch trình 3 ngày ở {dest}"
+
+            # attach preferences
+            q += f" • người: {people} • mức: {style}"
+
+            # set into session so main chat logic picks it up
+            st.session_state.user_input = q
+            # After submit we rerun to process immediately
+            st.rerun()
 
 
 # -------------------------
-# STREAMLIT UI (TABS)
+# STREAMLIT UI LAYOUT
 # -------------------------
-st.set_page_config(page_title=f"🤖 {ChatBotName} - Travel Assistant", layout="wide")
-st.title(f"🤖 Chatbot Trợ lý du lịch {ChatBotName}")
+
+# Render hero at the very top of the app
+render_hero_section()
+
+main_tab, analytics_tab = st.tabs(["💬 Chatbot Du lịch", "📊 Thống kê truy vấn"])
 
 with st.sidebar:
+    st.markdown("<div class='logo-title'><img src='https://img.icons8.com/emoji/48/000000/cloud-emoji.png'/> <h2>Mây Lang Thang</h2></div>", unsafe_allow_html=True)
     st.header("Cài đặt")
     language_option = st.selectbox("Ngôn ngữ (gợi ý trích xuất)", ["Tự động", "Tiếng Việt", "English"])
     info_options = st.multiselect("Hiển thị thông tin",
@@ -532,222 +729,179 @@ with st.sidebar:
     st.write("Chọn mức zoom bản đồ:")
     map_zoom = st.slider("Zoom (4 = xa, 15 = gần)", 4, 15, 8)
     st.markdown("---")
-    if OPENWEATHERMAP_API_KEY:
-        st.success("✅ OpenWeatherMap OK")
-    else:
-        st.error("Thiếu OpenWeatherMap API Key")
-    if GOOGLE_PLACES_KEY:
-        st.success("✅ Google Places API Key found (using Google for restaurants)")
-    else:
-        st.info("📂 Google Places API Key not found — using CSV fallback for restaurants")
-    if PIXABAY_API_KEY:
-        st.success("✅ Pixabay API sẵn sàng (hiển thị ảnh minh họa)")
-    else:
-        st.warning("⚠️ Thiếu Pixabay API key — sẽ hiển thị placeholder cho ảnh")
-    st.caption("🍜 Food AI: CSV local dữ liệu + GPT fallback")
+    # status cards
+    def status_card(title, ok=True):
+        cls = "status-ok" if ok else "status-bad"
+        icon = "✅" if ok else "⚠️"
+        st.markdown(f"<div class='{cls}'>{icon} {title}</div>", unsafe_allow_html=True)
+    status_card("OpenWeatherMap", bool(OPENWEATHERMAP_API_KEY))
+    status_card("Google Places", bool(GOOGLE_PLACES_KEY))
+    status_card("Pixabay", bool(PIXABAY_API_KEY))
     st.markdown("---")
+    st.caption("🍜 Food AI: CSV local dữ liệu + GPT fallback")
+    st.markdown("Version: v1.2")
 
+# initialize session messages
 if "messages" not in st.session_state:
     st.session_state.messages = [{"role": "system", "content": system_prompt}]
-# if "suggested_questions" not in st.session_state:
-#     st.session_state.suggested_questions = [
-#         "Thời tiết ở Đà Nẵng tuần tới?",
-#         "Top món ăn ở Huế?",
-#         "Lịch trình 3 ngày ở Nha Trang",
-#         "Có sự kiện gì ở Hà Nội tháng 12?"
-#     ]
-# -------------------------
-# AI sinh gợi ý nhanh (trả về luôn Python list của strings)
-# -------------------------
-def generate_ai_suggestions():
-    try:
-        prompt = f"""
-Bạn là {ChatBotName} – {system_prompt.strip()}
-Hãy tạo 4 câu hỏi gợi ý (ngắn gọn, thân thiện) để người dùng có thể hỏi bạn.
-Ví dụ: “Thời tiết ở Huế tuần tới?”, “Đặc sản nổi tiếng ở Hà Nội?”, ...
-Trả về dưới dạng danh sách (list) các chuỗi. Ví dụ:
-["Thời tiết ở Huế tuần tới?", "Món ăn ngon ở Đà Nẵng?", "Chi phí du lịch Sapa 3 ngày?", "Sự kiện nổi bật tháng này?"]
-"""
-        response = client.chat.completions.create(
-            model=DEPLOYMENT_NAME,
-            messages=[{"role": "system", "content": prompt}],
-            max_tokens=200,
-            temperature=0.7
-        )
-        text = response.choices[0].message.content.strip()
 
-        # 1) Thử parse JSON trực tiếp (ví dụ: ["...","..."])
-        try:
-            data = json.loads(text)
-            if isinstance(data, list) and all(isinstance(x, str) for x in data):
-                return [s.strip() for s in data][:4]
-        except Exception:
-            pass
-
-        # 2) Nếu model trả về 1 phần của Python list hoặc có assignment: tìm nội dung giữa dấu ngoặc vuông
-        m = re.search(r'\[.*\]', text, re.DOTALL)
-        if m:
-            list_text = m.group(0)
-            # Thử json.loads sau khi chuyển ' -> " nếu cần
-            try:
-                fixed = list_text.replace("'", '"')
-                data = json.loads(fixed)
-                if isinstance(data, list):
-                    return [s.strip() for s in data if isinstance(s, str)][:4]
-            except Exception:
-                # fallback: tách bằng dấu phẩy thủ công
-                inner = list_text[1:-1]
-                parts = [p.strip().strip('"\'' ) for p in inner.split(',') if p.strip()]
-                parts = [p if p.endswith('?') else p + '?' for p in parts]
-                return parts[:4]
-
-        # 3) Nếu không có ngoặc vuông, tách theo dòng / dấu phẩy / dấu hỏi
-        # tách theo newline
-        lines = [l.strip() for l in re.split(r'[\r\n]+', text) if l.strip()]
-        parts = []
-        if len(lines) > 1:
-            for l in lines:
-                # nếu dòng có nhiều câu phân tách bằng comma -> split
-                if ',' in l and len(l.split(',')) > 1:
-                    for p in l.split(','):
-                        p = p.strip().strip('"-• ')
-                        if p:
-                            parts.append(p if p.endswith('?') else p + '?')
-                else:
-                    # split các câu trong cùng 1 dòng bằng dấu '?'
-                    subs = [s.strip() for s in l.split('?') if s.strip()]
-                    for s in subs:
-                        parts.append(s + '?')
-        else:
-            # chỉ 1 dòng: split bằng comma hoặc bằng dấu '?'
-            single = lines[0] if lines else text
-            if ',' in single:
-                items = [p.strip().strip('"\'' ) for p in single.split(',') if p.strip()]
-                parts = [p if p.endswith('?') else p + '?' for p in items]
-            else:
-                subs = [s.strip() for s in re.split(r'\?|•|-', single) if s.strip()]
-                parts = [s + '?' for s in subs]
-
-        # dọn, loại bỏ trùng, giữ tối đa 4
-        clean = []
-        for p in parts:
-            if p and p not in clean:
-                clean.append(p)
-            if len(clean) >= 4:
-                break
-        if clean:
-            return clean[:4]
-
-    except Exception:
-        pass
-
-    # fallback cố định (luôn list)
-    return [
-        "Thời tiết ở Đà Nẵng tuần tới?",
-        "Top món ăn ở Huế?",
-        "Lịch trình 3 ngày ở Nha Trang",
-        "Có sự kiện gì ở Hà Nội tháng 12?"
-    ]
-
-
-# Khởi tạo gợi ý nhanh trong session (đảm bảo luôn là Python list)
-if "suggested_questions" not in st.session_state:
-    st.session_state.suggested_questions = generate_ai_suggestions()
-
-
-
-main_tab, analytics_tab = st.tabs(["💬 Chatbot Du lịch", "📊 Thống kê truy vấn"])
-
+# Main Tab
 with main_tab:
+    # --- Quick Search Form ---
+    with st.expander("🔎 Tìm kiếm nhanh chuyến đi"):
+        col1, col2, col3, col4 = st.columns([2,1,1,1])
+        with col1:
+            city_qs = st.text_input("🏙️ Điểm đến", "Đà Nẵng")
+        with col2:
+            start_qs = st.date_input("📅 Bắt đầu", datetime(2025,10,20))
+        with col3:
+            end_qs = st.date_input("📅 Kết thúc", datetime(2025,10,22))
+        with col4:
+            people_qs = st.slider("👥 Người", 1, 10, 1)
+
+        col5, col6 = st.columns([1,3])
+        with col5:
+            style_qs = st.selectbox("💰 Mức chi tiêu", ["Tiết kiệm","Trung bình","Cao cấp"], index=1)
+        with col6:
+            if st.button("🚀 Xem gợi ý"):
+                st.session_state.quicksearch = {
+                    "city": city_qs,
+                    "start": start_qs,
+                    "end": end_qs,
+                    "people": people_qs,
+                    "style": style_qs
+                }
+
+    # Nếu người dùng vừa thực hiện tìm kiếm nhanh
+    if "quicksearch" in st.session_state:
+        qs = st.session_state.quicksearch
+        city_qs = qs["city"]; start_qs = qs["start"]; end_qs = qs["end"]
+        people_qs = qs["people"]; style_qs = qs["style"]
+
+        st.markdown(f"### ✈️ Gợi ý cho chuyến đi {city_qs} ({start_qs} – {end_qs})")
+        weather_qs = get_weather_forecast(city_qs, start_qs, end_qs)
+        cost_qs = estimate_cost(city_qs, (end_qs - start_qs).days + 1, people_qs, style_qs)
+
+        colA, colB = st.columns(2)
+        with colA:
+            st.markdown(f"**{weather_qs}**")
+            st.markdown(f"**{cost_qs}**")
+        with colB:
+            img = get_city_image(city_qs)
+            if img:
+                st.image(img, caption=f"🏞️ {city_qs}", use_container_width=True)
+            lat, lon, addr = geocode_city(city_qs)
+            if lat and lon:
+                show_map(lat, lon, zoom=map_zoom, title=addr or city_qs)
+
+        st.markdown("---")
+
     st.write("### 🔎 Gợi ý nhanh")
     cols = st.columns(len(st.session_state.suggested_questions))
     for i, q in enumerate(st.session_state.suggested_questions):
-        if cols[i].button(q):
+        if cols[i].button(q, key=f"sugg_{i}"):
             st.session_state.user_input = q
 
+    # Chat input
     user_input = st.chat_input("Mời bạn đặt câu hỏi:")
+    # preserve suggestion override
     if "user_input" in st.session_state and st.session_state.user_input:
         user_input = st.session_state.pop("user_input")
 
     if user_input:
-        # Ghi lại tin nhắn người dùng
+        # display user message
         with st.chat_message("user", avatar="🧭"):
-            st.markdown(user_input)
+            st.markdown(f"<div class='user-message'>{user_input}</div>", unsafe_allow_html=True)
         st.session_state.messages.append({"role": "user", "content": user_input})
 
-        # Phân tích thông tin
+        # analyze input for city and dates
         city_guess, start_date, end_date = extract_city_and_dates(user_input)
+        days = extract_days_from_text(user_input, start_date, end_date)
         log_interaction(user_input, city_guess, start_date, end_date)
 
-        # Kiểm tra ngày vượt giới hạn dự báo
+        # weather forecast check
         if start_date:
             today = datetime.now().date()
             max_forecast_date = today + timedelta(days=5)
             if start_date.date() > max_forecast_date:
-                st.warning(f"⚠️ Lưu ý: OpenWeather chỉ cung cấp dự báo ~5 ngày. "
-                        f"Bạn yêu cầu bắt đầu {start_date.strftime('%d/%m/%Y')}.")
+                st.warning(f"⚠️ Lưu ý: OpenWeather chỉ cung cấp dự báo ~5 ngày. Bạn yêu cầu bắt đầu {start_date.strftime('%d/%m/%Y')}.")
 
-        # ✅ Gợi ý nhanh (emoji + chat style)
+        # quick blocks (Weather, Cost, Events)
         blocks = []
         if city_guess and "Weather" in info_options:
             blocks.append(get_weather_forecast(city_guess, start_date, end_date, user_input))
-        # if city_guess and "Food" in info_options:
-        #     blocks.append(f"🍜 Đặc sản nổi bật của {city_guess}:")
         if city_guess and "Cost" in info_options:
-            blocks.append(estimate_cost(city_guess))
+            blocks.append(estimate_cost(city_guess, days=days))
         if city_guess and "Events" in info_options:
             blocks.append(suggest_events(city_guess))
-        # if city_guess and "Photos" in info_options:
-        #     blocks.append(f"📸 Điểm check-in nổi bật ở {city_guess}:")
 
         for b in blocks:
-            if isinstance(b, str):
-                b = b.replace("\\n", "\n")
             with st.chat_message("assistant", avatar="🤖"):
-                st.markdown(b)
+                if isinstance(b, str):
+                    st.markdown(b.replace("\\n", "\n"))
+                else:
+                    st.write(b)
 
-        # ✅ Phần trả lời AI chính — có spinner
+        # main assistant response with spinner + progress bar
         with st.spinner("⏳ Đang soạn phản hồi..."):
             try:
+                # Simulate progressive feedback
                 progress_text = "AI đang phân tích dữ liệu du lịch..."
                 progress_bar = st.progress(0, text=progress_text)
 
-                # Hiệu ứng tiến trình giả lập
-                for percent_complete in range(0, 101, 15):
-                    time.sleep(0.1)
+                for percent_complete in range(0, 101, 20):
+                    time.sleep(0.08)
                     progress_bar.progress(percent_complete, text=progress_text)
 
-                # ✅ Ẩn progress bar sau khi hoàn tất
                 progress_bar.empty()
 
-                # Gọi OpenAI để sinh phản hồi
-                response = client.chat.completions.create(
-                    model=DEPLOYMENT_NAME,
-                    messages=st.session_state.messages,
-                    max_tokens=800,
-                    temperature=0.7
-                )
+                # Call OpenAI for full response if client available
+                assistant_text = ""
+                if client:
+                    response = client.chat.completions.create(
+                        model=DEPLOYMENT_NAME,
+                        messages=st.session_state.messages,
+                        max_tokens=900,
+                        temperature=0.7
+                    )
+                    assistant_text = response.choices[0].message.content.strip()
+                else:
+                    # fallback summary if no OpenAI key
+                    assistant_text = f"Xin chào! Tôi có thể giúp bạn với thông tin về {city_guess or 'địa điểm'} — thử hỏi 'Thời tiết', 'Đặc sản', hoặc 'Lịch trình 3 ngày'."
 
-                assistant_text = response.choices[0].message.content.strip()
-
-                # 💕 Thêm lời chúc kết thúc nếu chưa có emoji
+                # ensure friendly closing
                 if not assistant_text.endswith(("🌤️❤️", "😊", "🌸", "🌴", "✨")):
                     assistant_text += "\n\nChúc bạn có chuyến đi vui vẻ 🌤️❤️"
 
                 st.session_state.messages.append({"role": "assistant", "content": assistant_text})
 
-                # 🎈 Hiệu ứng khi hoàn thành
-                st.balloons()
-
+                # show assistant message with styled bubble
                 with st.chat_message("assistant", avatar="🤖"):
-                    st.markdown(assistant_text)
+                    # Typing giả
+                    placeholder = st.empty()
+                    display_text = ""
+                    for char in assistant_text:
+                        display_text += char
+                        placeholder.markdown(display_text + "▌")  # con trỏ giả
+                        time.sleep(0.01)
+                    time.sleep(0.3)
+                    placeholder.empty()
+
+                    # Hiển thị Markdown gốc với khung màu bằng container
+                    with st.container():
+                        st.markdown(
+                            f"<div class='assistant-bubble'>", unsafe_allow_html=True
+                        )
+                        st.markdown(assistant_text)  # Markdown giữ nguyên
+                        st.markdown("</div>", unsafe_allow_html=True)
+
+
+                st.balloons()
 
             except Exception as e:
                 st.error(f"⚠️ Lỗi khi gọi OpenAI: {e}")
 
-
-
-        # ✅ Hiển thị thêm phần bản đồ & ảnh
+        # Display map and photos and food/restaurants in two columns
         lat, lon, addr = (None, None, None)
         if city_guess:
             lat, lon, addr = geocode_city(city_guess)
@@ -762,6 +916,7 @@ with main_tab:
                     st.image(img, caption=f"🏞️ {city_guess}", use_container_width=True)
                 else:
                     st.info("Không tìm thấy ảnh minh họa.")
+
         with cols[1]:
             if "Food" in info_options:
                 st.subheader(f"🍽️ Ẩm thực & Nhà hàng tại {city_guess or 'địa điểm'}")
@@ -779,11 +934,27 @@ with main_tab:
                 else:
                     st.info("Không tìm thấy món đặc trưng (CSV/GPT fallback không trả kết quả).")
 
+            # Restaurants (hybrid)
+            if city_guess:
+                st.markdown("#### 🍴 Nhà hàng gợi ý")
+                restaurants = get_restaurants(city_guess, limit=5)
+                if restaurants:
+                    for r in restaurants:
+                        if isinstance(r, dict) and r.get("error"):
+                            st.write(f"⚠️ {r.get('error')}")
+                        else:
+                            name = r.get("name") or r.get("place_name") or str(r)
+                            rating = r.get("rating", "")
+                            addr_text = r.get("address", r.get("formatted_address", ""))
+                            maps_url = r.get("maps_url", "")
+                            st.markdown(f"- **{name}** {f'• ⭐ {rating}' if rating else ''}  \n  {addr_text}  " + (f"[Bản đồ]({maps_url})" if maps_url else ""))
+                else:
+                    st.info("Không có dữ liệu nhà hàng (CSV/Google Places fallback).")
 
 with analytics_tab:
     st.header("📊 Thống kê truy vấn (gần đây)")
 
-    # --- Xác nhận bảo vệ trước khi xóa ---
+    # --- Delete history with confirmation ---
     with st.expander("🗑️ Xóa lịch sử truy vấn"):
         st.warning("⚠️ Thao tác này sẽ xóa toàn bộ lịch sử truy vấn đã lưu trong cơ sở dữ liệu (SQLite). Không thể hoàn tác.")
         confirm_delete = st.checkbox("Tôi hiểu và muốn xóa toàn bộ lịch sử truy vấn", value=False)
@@ -801,20 +972,38 @@ with analytics_tab:
         else:
             st.info("👉 Hãy tick vào ô xác nhận trước khi xóa lịch sử.")
 
-    # --- Hiển thị thống kê truy vấn ---
+    # --- Show analytics: metric, chart, table ---
     try:
         conn = sqlite3.connect(DB_PATH)
-        df_logs = pd.read_sql("SELECT * FROM interactions ORDER BY timestamp DESC LIMIT 200", conn)
-        total = int(df_logs.shape[0])
+        df_logs = pd.read_sql("SELECT * FROM interactions ORDER BY timestamp DESC LIMIT 1000", conn)
+        conn.close()
+
+        total = int(df_logs.shape[0]) if not df_logs.empty else 0
         st.metric("Tổng tương tác", total)
 
         if not df_logs.empty:
+            # convert timestamp
+            df_logs['timestamp_dt'] = pd.to_datetime(df_logs['timestamp'])
+            df_logs['date'] = df_logs['timestamp_dt'].dt.date
+
+            # chart: queries per day
+            series = df_logs.groupby('date').size().reset_index(name='queries')
+            fig = px.bar(series, x='date', y='queries', title='📈 Số truy vấn mỗi ngày', color='queries', color_continuous_scale='Blues')
+            st.plotly_chart(fig, use_container_width=True)
+
+            # top cities
+            top_cities = df_logs['city'].fillna("Unknown").value_counts().reset_index()
+            top_cities.columns = ['city', 'count']
+            if not top_cities.empty:
+                fig2 = px.bar(top_cities.head(10), x='city', y='count', title='📍 Top địa điểm được hỏi', color='count', color_continuous_scale='Viridis')
+                st.plotly_chart(fig2, use_container_width=True)
+
             st.dataframe(df_logs[["timestamp", "user_input", "city"]])
         else:
             st.info("Chưa có truy vấn nào được ghi nhận.")
-        conn.close()
     except Exception as e:
         st.warning(f"Lỗi đọc dữ liệu: {e}")
 
-
-# End of file
+# Footer tip
+st.markdown("---")
+st.markdown("<div class='small-muted'>Tip: Bạn có thể yêu cầu cụ thể như 'Lịch trình 3 ngày ở Hội An', 'Đặc sản Sapa', hoặc 'Thời tiết Đà Nẵng 2025-10-20 đến 2025-10-22'.</div>", unsafe_allow_html=True)
