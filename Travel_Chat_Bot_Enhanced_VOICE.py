@@ -241,22 +241,46 @@ def show_map(lat, lon, zoom=8, title=""):
     if lat is None or lon is None:
         st.info("Không có dữ liệu toạ độ để hiển thị bản đồ.")
         return
+
+    # ép kiểu float để tránh lỗi decimal
+    lat, lon = float(lat), float(lon)
+
     st.write(f"**Vị trí:** {title} ({lat:.5f}, {lon:.5f})")
-    view = pdk.ViewState(latitude=lat, longitude=lon, zoom=zoom)
+
+    # Thiết lập chế độ xem bản đồ
+    view_state = pdk.ViewState(latitude=lat, longitude=lon, zoom=zoom)
+
+    # ✅ Lớp hiển thị chấm đỏ chính xác vị trí
     layer = pdk.Layer(
         "ScatterplotLayer",
         data=pd.DataFrame([{"lat": lat, "lon": lon}]),
+        get_position='[lon, lat]',          # Giữ nguyên vì Pydeck yêu cầu [lon, lat]
+        get_radius=2000,                    # kích thước marker
+        get_fill_color=[255, 0, 0],         # màu đỏ đậm
+        get_line_color=[0, 0, 0],           # viền đen mảnh
+        line_width_min_pixels=1,
+        pickable=True,
+        opacity=0.9,
+    )
+
+    # ✅ Thêm lớp nền “Marker” nhỏ để dễ nhìn
+    marker_layer = pdk.Layer(
+        "TextLayer",
+        data=pd.DataFrame([{"lat": lat, "lon": lon, "name": "📍"}]),
         get_position='[lon, lat]',
-        get_radius=3000,
-        get_fill_color=[220, 40, 40],
-        get_opacity=0.9,
+        get_text="name",
+        get_size=24,
+        get_color=[200, 30, 30],
+        billboard=True,
     )
+
     deck = pdk.Deck(
-        layers=[layer],
-        initial_view_state=view,
+        layers=[layer, marker_layer],
+        initial_view_state=view_state,
         map_style="https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
-        tooltip={"text": title or "Vị trí"}
+        tooltip={"text": title or "Vị trí"},
     )
+
     st.pydeck_chart(deck)
 
 # -------------------------
@@ -293,6 +317,13 @@ Câu: "{user_text}"
 def get_weather_forecast(city_name, start_date=None, end_date=None, user_text=None):
     if not OPENWEATHERMAP_API_KEY:
         return "⚠️ Thiếu OpenWeatherMap API Key."
+    
+    # Nếu người dùng không nhập ngày => lấy từ hôm nay đến 3 ngày sau
+    if start_date is None or end_date is None:
+        today = datetime.now().date()
+        start_date = datetime.combine(today, datetime.min.time())
+        end_date = datetime.combine(today + timedelta(days=3), datetime.min.time())
+    
     try:
         def _fetch_weather(city):
             url = f"http://api.openweathermap.org/data/2.5/forecast?q={city}&appid={OPENWEATHERMAP_API_KEY}&lang=vi&units=metric"
@@ -827,10 +858,19 @@ with main_tab:
                 except Exception as e:
                     st.error(f"Lỗi nhận diện: {e}")
 
+    # --- Hiển thị lại toàn bộ lịch sử cũ ---
+    for msg in st.session_state.messages:
+        if msg["role"] == "user":
+            with st.chat_message("user", avatar="🧭"):
+                st.markdown(f"<div class='user-message'>{msg['content']}</div>", unsafe_allow_html=True)
+        elif msg["role"] == "assistant":
+            with st.chat_message("assistant", avatar="🤖"):
+                st.markdown(f"<div class='assistant-bubble'>{msg['content']}</div>", unsafe_allow_html=True)
+
     # Chat input (gõ phím)
     user_input = st.chat_input("Mời bạn đặt câu hỏi:")
     if "user_input" in st.session_state and st.session_state.user_input:
-        user_input = st.session_state.pop("user_input")
+        user_input = st.session_state.user_input
 
     if user_input:
         with st.chat_message("user", avatar="🧭"):
