@@ -41,7 +41,7 @@ from gtts import gTTS
 # -------------------------
 # PAGE CONFIG & THEME
 # -------------------------
-st.set_page_config(page_title="🤖 [Mây Lang Thang] - Travel Assistant (Voice)", layout="wide", page_icon="🎙️")
+st.set_page_config(page_title="[Mây Lang Thang] - Travel Assistant (Voice)", layout="wide", page_icon="🤖")
 
 # Global CSS + UI tweaks (including hero styles)
 st.markdown(
@@ -567,6 +567,50 @@ Message: "{user_text}"
     except Exception:
         return None, None, None
 
+def is_travel_related_via_gpt(user_text):
+    """
+    Dùng OpenAI để xác định xem câu hỏi có liên quan đến du lịch không.
+    Trả về True nếu liên quan, False nếu không.
+    """
+    if not client:
+        return True  # nếu không có API key thì cho qua luôn
+
+    try:
+        prompt = f"""
+Bạn là bộ phân loại chủ đề thông minh.
+Hãy xác định xem câu sau có liên quan đến lĩnh vực *du lịch Việt Nam* hay không.
+
+Các chủ đề được coi là liên quan bao gồm:
+- địa điểm, thành phố, tỉnh, danh lam thắng cảnh
+- thời tiết, khí hậu
+- lịch trình du lịch, tour, chi phí, gợi ý điểm đến
+- món ăn địa phương, đặc sản, nhà hàng
+- khách sạn, homestay, resort
+- sự kiện, lễ hội, văn hoá vùng miền
+
+Nếu KHÔNG thuộc những chủ đề trên (ví dụ: lập trình, tài chính, thể thao, học tập...), hãy trả về JSON:
+{{"related": false}}
+
+Nếu CÓ liên quan, trả về JSON:
+{{"related": true}}
+
+Câu người dùng: "{user_text}"
+"""
+        response = client.chat.completions.create(
+            model=DEPLOYMENT_NAME,
+            messages=[{"role": "system", "content": prompt}],
+            temperature=0,
+            max_tokens=30,
+        )
+        text = response.choices[0].message.content.strip()
+        if '"related": true' in text.lower():
+            return True
+        if '"related": false' in text.lower():
+            return False
+    except Exception as e:
+        print(f"[WARN] Lỗi phân loại chủ đề: {e}")
+    return True  # fallback
+
 # -------------------------
 # AI suggestions generator
 # -------------------------
@@ -642,31 +686,32 @@ Trả về dưới dạng danh sách (list) các chuỗi.
         "Có sự kiện gì ở Hà Nội tháng 12?"
     ]
 
-if "suggested_questions" not in st.session_state:
-    st.session_state.suggested_questions = generate_ai_suggestions()
+# if "suggested_questions" not in st.session_state:
+#     st.session_state.suggested_questions = generate_ai_suggestions()
 
 # -------------------------
 # HERO / HEADER SECTION
 # -------------------------
 def render_hero_section(default_city_hint="Hội An, Đà Nẵng, Hà Nội..."):
-    hero_img = "https://images.unsplash.com/photo-1633073985249-b2d67bdf6b7d?ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D&auto=format&fit=crop&q=80&w=1074"
-    st.markdown(f"""
-    <div class='hero' style="background-image: url('{hero_img}'); background-size: cover; background-position: center; background-repeat: no-repeat; height:200px;">
-      <div class='hero__overlay'>
-        <div class='hero__card'>
-          <div style='display:flex; align-items:center; justify-content:space-between; gap:12px;'>
-            <div style='flex:1'>
-              <h1 class='hero__title'>Khám phá Việt Nam cùng Mây Lang Thang</h1>
-              <p class='hero__subtitle'>Gợi ý lịch trình, món ăn, dự báo thời tiết. Nhập điểm đến, chọn ngày và bắt đầu cuộc hành trình!</p>
-            </div>
-            <div style='min-width:260px; text-align:right;'>
-              <span style='font-size:14px; opacity:0.95'>🌤️ Tìm nhanh & gợi ý tức thì</span>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
+    # st.markdown("<div class='logo-title'><img src='https://img.icons8.com/emoji/48/000000/cloud-emoji.png'/> <h2>Mây Lang Thang</h2></div>", unsafe_allow_html=True)
+    # hero_img = "https://images.unsplash.com/photo-1633073985249-b2d67bdf6b7d?ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D&auto=format&fit=crop&q=80&w=1074"
+    # st.markdown(f"""
+    # <div class='hero' style="background-image: url('{hero_img}'); background-size: cover; background-position: center; background-repeat: no-repeat; height:200px;">
+    #   <div class='hero__overlay'>
+    #     <div class='hero__card'>
+    #       <div style='display:flex; align-items:center; justify-content:space-between; gap:12px;'>
+    #         <div style='flex:1'>
+    #           <h1 class='hero__title'>Khám phá Việt Nam cùng Mây Lang Thang</h1>
+    #           <p class='hero__subtitle'>Gợi ý lịch trình, món ăn, dự báo thời tiết. Nhập điểm đến, chọn ngày và bắt đầu cuộc hành trình!</p>
+    #         </div>
+    #         <div style='min-width:260px; text-align:right;'>
+    #           <span style='font-size:14px; opacity:0.95'>🌤️ Tìm nhanh & gợi ý tức thì</span>
+    #         </div>
+    #       </div>
+    #     </div>
+    #   </div>
+    # </div>
+    # """, unsafe_allow_html=True)
 
     with st.form(key='hero_search_form', clear_on_submit=False):
         cols = st.columns([3,2,1,1])
@@ -674,13 +719,13 @@ def render_hero_section(default_city_hint="Hội An, Đà Nẵng, Hà Nội...")
         dates = cols[1].date_input("Ngày (bắt đầu / kết thúc)", [])
         people = cols[2].selectbox("Người", [1,2,3,4,5,6], index=0)
         style = cols[3].selectbox("Mức chi", ["trung bình", "tiết kiệm", "cao cấp"], index=0)
-        submitted = st.form_submit_button("Tìm kiếm nhanh", use_container_width=True)
+        submitted = st.form_submit_button("Gợi ý nhanh", use_container_width=True)
         if submitted:
-            if isinstance(dates, list) and len(dates) == 2:
+            if len(dates) == 2:
                 s = dates[0].strftime("%Y-%m-%d")
                 e = dates[1].strftime("%Y-%m-%d")
                 q = f"Lịch trình { ( (dates[1]-dates[0]).days +1 ) } ngày ở {dest} từ {s} đến {e}"
-            elif isinstance(dates, list) and len(dates) == 1:
+            elif len(dates) == 1:
                 s = dates[0].strftime("%Y-%m-%d")
                 q = f"Lịch trình 1 ngày ở {dest} vào {s}"
             else:
@@ -741,7 +786,7 @@ main_tab, analytics_tab = st.tabs(["💬 Chatbot Du lịch", "📊 Thống kê t
 with st.sidebar:
     st.markdown("<div class='logo-title'><img src='https://img.icons8.com/emoji/48/000000/cloud-emoji.png'/> <h2>Mây Lang Thang</h2></div>", unsafe_allow_html=True)
     st.header("Cài đặt")
-    language_option = st.selectbox("Ngôn ngữ (gợi ý trích xuất)", ["Tự động", "Tiếng Việt", "English"])
+    # language_option = st.selectbox("Ngôn ngữ (gợi ý trích xuất)", ["Tự động", "Tiếng Việt", "English"])
     info_options = st.multiselect("Hiển thị thông tin",
                                   ["Weather", "Food", "Map", "Photos", "Cost", "Events"],
                                   default=["Weather", "Map","Food", "Photos"])
@@ -774,30 +819,31 @@ if "messages" not in st.session_state:
     st.session_state.messages = [{"role": "system", "content": system_prompt}]
 
 with main_tab:
+    today = datetime.now().date()
     # --- Quick Search Form ---
-    with st.expander("🔎 Tìm kiếm nhanh chuyến đi"):
-        col1, col2, col3, col4 = st.columns([2,1,1,1])
-        with col1:
-            city_qs = st.text_input("🏙️ Điểm đến", "Đà Nẵng")
-        with col2:
-            start_qs = st.date_input("📅 Bắt đầu", datetime(2025,10,20))
-        with col3:
-            end_qs = st.date_input("📅 Kết thúc", datetime(2025,10,22))
-        with col4:
-            people_qs = st.slider("👥 Người", 1, 10, 1)
+    # with st.expander("🔎 Tìm kiếm nhanh chuyến đi"):
+    #     col1, col2, col3, col4 = st.columns([2,1,1,1])
+    #     with col1:
+    #         city_qs = st.text_input("🏙️ Điểm đến", "Đà Nẵng")
+    #     with col2:
+    #         start_qs = st.date_input("📅 Bắt đầu", today)
+    #     with col3:
+    #         end_qs = st.date_input("📅 Kết thúc", today + timedelta(days=3))
+    #     with col4:
+    #         people_qs = st.slider("👥 Người", 1, 10, 1)
 
-        col5, col6 = st.columns([1,3])
-        with col5:
-            style_qs = st.selectbox("💰 Mức chi tiêu", ["Tiết kiệm","Trung bình","Cao cấp"], index=1)
-        with col6:
-            if st.button("🚀 Xem gợi ý"):
-                st.session_state.quicksearch = {
-                    "city": city_qs,
-                    "start": start_qs,
-                    "end": end_qs,
-                    "people": people_qs,
-                    "style": style_qs
-                }
+    #     col5, col6 = st.columns([1,3])
+    #     with col5:
+    #         style_qs = st.selectbox("💰 Mức chi tiêu", ["Tiết kiệm","Trung bình","Cao cấp"], index=1)
+    #     with col6:
+    #         if st.button("🚀 Xem gợi ý"):
+    #             st.session_state.quicksearch = {
+    #                 "city": city_qs,
+    #                 "start": start_qs,
+    #                 "end": end_qs,
+    #                 "people": people_qs,
+    #                 "style": style_qs
+    #             }
 
     # Nếu người dùng vừa thực hiện tìm kiếm nhanh
     if "quicksearch" in st.session_state:
@@ -820,19 +866,19 @@ with main_tab:
                 show_map(lat, lon, zoom=map_zoom, title=addr or city_qs)
         st.markdown("---")
 
-    st.write("### 🔎 Gợi ý nhanh")
-    cols = st.columns(len(st.session_state.suggested_questions))
-    for i, q in enumerate(st.session_state.suggested_questions):
-        if cols[i].button(q, key=f"sugg_{i}"):
-            st.session_state.user_input = q
+    # st.write("### 🔎 Gợi ý")
+    # cols = st.columns(len(st.session_state.suggested_questions))
+    # for i, q in enumerate(st.session_state.suggested_questions):
+    #     if cols[i].button(q, key=f"sugg_{i}"):
+    #         st.session_state.user_input = q
 
     # === VOICE INPUT BAR ===
     voice_text = None
     if enable_voice:
-        st.write("### 🎙️ Nói để nhập câu hỏi")
+        # st.write("### 🎙️ Nói để nhập câu hỏi")
         audio = mic_recorder(
-            start_prompt="Bấm để nói",
-            stop_prompt="Dừng",
+            start_prompt="🎙️ [Chat voice] Nói để nhập câu hỏi",
+            stop_prompt="✋Dừng nhận diện giọng nói",
             just_once=True,
             key="rec_chat"
         )
@@ -875,8 +921,16 @@ with main_tab:
     if user_input:
         with st.chat_message("user", avatar="🧭"):
             st.markdown(f"<div class='user-message'>{user_input}</div>", unsafe_allow_html=True)
+        # st.session_state.messages.append({"role": "user", "content": user_input})
+        # --- Kiểm tra chủ đề bằng OpenAI ---
+        if not is_travel_related_via_gpt(user_input):
+            msg = "Xin lỗi 😅, tôi chỉ hỗ trợ các câu hỏi liên quan đến **du lịch Việt Nam**, như thời tiết, địa điểm, món ăn, lịch trình..."
+            with st.chat_message("assistant", avatar="🤖"):
+                st.markdown(msg)
+            st.session_state.messages.append({"role": "assistant", "content": msg})
+            st.stop()
         st.session_state.messages.append({"role": "user", "content": user_input})
-
+        
         city_guess, start_date, end_date = extract_city_and_dates(user_input)
         days = extract_days_from_text(user_input, start_date, end_date)
         log_interaction(user_input, city_guess, start_date, end_date)
