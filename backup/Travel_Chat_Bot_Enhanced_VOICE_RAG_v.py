@@ -1,13 +1,14 @@
-# Travel_Chat_Bot_Enhanced_VOICE_RAG_fixed2.py
+# Travel_Chat_Bot_Enhanced_VOICE_RAG.py
 # =================================
-# Mở rộng: RAG (ChromaDB) + long-term memory + intent quick-match + recommendations
-# Giữ lại toàn bộ chức năng gốc (voice, TTS, weather, map, foods, restaurants...)
+# Travel assistant with Voice + RAG (Chroma) + long-term memory + intent quick-match
+# - Separate embedding client using OPENAI_API_KEY_EMBEDDING (text-embedding-3-small)
+# - Safe collection creation to avoid embedding-dimension mismatch
+# - No include="ids" in queries (compatible with Chroma >=0.5.x)
 #
-# Yêu cầu:
-#   pip install streamlit-mic-recorder SpeechRecognition pydub gTTS chromadb openai geopy pandas pydeck plotly sentence-transformers
-#   Cài ffmpeg cho pydub
+# Requirements:
+# pip install streamlit streamlit-mic-recorder SpeechRecognition pydub gTTS chromadb openai geopy pandas pydeck plotly
+# ffmpeg installed for pydub
 #
-
 import streamlit as st
 import openai
 import json
@@ -21,65 +22,23 @@ import pydeck as pdk
 import re
 import time
 import plotly.express as px
-
-# === VOICE imports (mới) ===
 import io
 import base64
 import tempfile
 import subprocess
 from streamlit_mic_recorder import mic_recorder
 import speech_recognition as sr
-from pydub import AudioSegment   # yêu cầu ffmpeg
+from pydub import AudioSegment
 from gtts import gTTS
-
-# === RAG / Chroma imports ===
-from chromadb import PersistentClient
-# NOTE: Replaced Client->PersistentClient for Chroma v1.2+# Chroma v1.2+ no longer uses chromadb.config.Settings
+from chromadb import Client as ChromaClient
+from chromadb.config import Settings as ChromaSettings
 import uuid
 
-# === THÊM IMPORTS CHO EMBEDDING LOCAL ===
-from sentence_transformers import SentenceTransformer
-import numpy as np
-
-# === KHAI BÁO MODEL EMBEDDING LOCAL ===
-# === KHAI BÁO MODEL EMBEDDING LOCAL ===
-@st.cache_resource
-def load_embedding_model():
-    try:
-        # Thử tải từ thư mục local trước, nếu không có thì tải từ Hugging Face
-        model_path = "data/all-MiniLM-L6-v2"
-        if os.path.exists(model_path) and os.path.isdir(model_path):
-            # Kiểm tra xem thư mục có chứa model không
-            if any(file.endswith('.bin') for file in os.listdir(model_path)):
-                model = SentenceTransformer(model_path)
-                print("✅ Đã tải model embedding local: all-MiniLM-L6-v2")
-                return model
-        
-        # Nếu không có model local, tải từ Hugging Face
-        print("📥 Đang tải model từ Hugging Face...")
-        model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
-        
-        # Lưu model vào thư mục local để lần sau dùng
-        os.makedirs(model_path, exist_ok=True)
-        model.save(model_path)
-        print(f"✅ Đã tải và lưu model vào: {model_path}")
-        return model
-    except Exception as e:
-        print(f"❌ Lỗi khi tải model embedding: {e}")
-        return None
-
-# Load model
-embedding_model = load_embedding_model()
-
-# === Ensure single persistent Chroma client in Streamlit session ===
-CHROMA_PERSIST_DIR = os.getenv("CHROMA_PERSIST_DIR", "chromadb_data")
-# We'll create chroma_client lazily in init_chroma(), but ensure session key exists placeholder
-# Actual ChromaClient will be created inside init_chroma using this CHROMA_PERSIST_DIR.
-
+# -------------------------
+# PAGE CONFIG & THEME
 # -------------------------
 st.set_page_config(page_title="[Mây Lang Thang] - Travel Assistant (Voice + RAG)", layout="wide", page_icon="🤖")
 
-# Global CSS + UI tweaks
 st.markdown(
     """
     <style>
@@ -115,64 +74,6 @@ st.markdown(
       border-radius: 15px;
       margin-bottom: 6px;
     }
-    .source-badge {
-      background: #e8f5e8;
-      border: 1px solid #4caf50;
-      border-radius: 12px;
-      padding: 8px 12px;
-      margin: 5px 0;
-      font-size: 0.85em;
-    }
-    .source-chroma {
-      background: #e3f2fd;
-      border-left: 4px solid #2196f3;
-    }
-    .source-intent {
-      background: #fff3e0;
-      border-left: 4px solid #ff9800;
-    }
-    .source-memory {
-      background: #f3e5f5;
-      border-left: 4px solid #9c27b0;
-    }
-    /* HERO */
-    .hero {
-      position: relative;
-      border-radius: 16px;
-      overflow: hidden;
-      box-shadow: 0 8px 30px rgba(43,76,126,0.12);
-      margin-bottom: 18px;
-    }
-    .hero__bg {
-      width: 100%;
-      height: 320px;
-      object-fit: cover;
-      filter: brightness(0.65) saturate(1.05);
-    }
-    .hero__overlay {
-      position: absolute;
-      top: 0; left: 0; right: 0; bottom: 0;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 24px;
-    }
-    .hero__card {
-      background: linear-gradient(90deg, rgba(255,255,255,0.02), rgba(255,255,255,0.08));
-      backdrop-filter: blur(6px);
-      border-radius: 12px;
-      padding: 18px;
-      width: 100%;
-      max-width: 980px;
-      color: white;
-    }
-    .hero__title { font-size: 28px; font-weight:700; margin:0 0 6px 0; color: #fff; }
-    .hero__subtitle { margin:0 0 12px 0; color: #f0f6ff; }
-    .hero__cta { display:flex; gap:8px; align-items:center; }
-    @media (max-width: 768px) {
-      .hero__bg { height: 220px; }
-      .hero__title { font-size: 20px; }
-    }
     .audio-wrapper {margin-top: 6px;}
     </style>
     """, unsafe_allow_html=True
@@ -185,29 +86,41 @@ try:
     OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
 except Exception:
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", None)
+
 OPENAI_ENDPOINT = st.secrets.get("OPENAI_ENDPOINT", "https://api.openai.com/v1") if hasattr(st, 'secrets') else os.getenv("OPENAI_ENDPOINT", "https://api.openai.com/v1")
 DEPLOYMENT_NAME = st.secrets.get("DEPLOYMENT_NAME", "gpt-4o-mini") if hasattr(st, 'secrets') else os.getenv("DEPLOYMENT_NAME", "gpt-4o-mini")
 OPENWEATHERMAP_API_KEY = st.secrets.get("OPENWEATHERMAP_API_KEY", "") if hasattr(st, 'secrets') else os.getenv("OPENWEATHERMAP_API_KEY", "")
 GOOGLE_PLACES_KEY = st.secrets.get("PLACES_API_KEY", "") if hasattr(st, 'secrets') else os.getenv("PLACES_API_KEY", "")
 PIXABAY_API_KEY = st.secrets.get("PIXABAY_API_KEY", "") if hasattr(st, 'secrets') else os.getenv("PIXABAY_API_KEY", "")
 
-# Chroma persistent dir (tùy chọn)
+# Embedding API Key (separate)
+try:
+    OPENAI_API_KEY_EMBEDDING = st.secrets.get("OPENAI_API_KEY_EMBEDDING", None) if hasattr(st, 'secrets') else os.getenv("OPENAI_API_KEY_EMBEDDING", None)
+except Exception:
+    OPENAI_API_KEY_EMBEDDING = os.getenv("OPENAI_API_KEY_EMBEDDING", None)
+
+# Chroma persistent dir
 CHROMA_PERSIST_DIR = os.getenv("CHROMA_PERSIST_DIR", "chromadb_data")
 
-# Initialize OpenAI client (using openai Python SDK modern interface)
+# Initialize OpenAI clients
 if OPENAI_API_KEY:
     client = openai.OpenAI(base_url=OPENAI_ENDPOINT, api_key=OPENAI_API_KEY)
 else:
     client = None
 
-ChatBotName = "[Mây Lang Thang]"  # display name
+if OPENAI_API_KEY_EMBEDDING:
+    embedding_client = openai.OpenAI(base_url=OPENAI_ENDPOINT, api_key=OPENAI_API_KEY_EMBEDDING)
+else:
+    embedding_client = client  # fallback
+
+ChatBotName = "[Mây Lang Thang]"
 system_prompt = """
 Bạn là Hướng dẫn viên du lịch ảo Alex - người kể chuyện, am hiểu văn hóa, lịch sử, ẩm thực và thời tiết Việt Nam.
 Luôn đưa ra thông tin hữu ích, gợi ý lịch trình, món ăn, chi phí, thời gian lý tưởng, sự kiện và góc chụp ảnh.
 """
 
 # -------------------------
-# DB LOGGING (SQLite) - ĐÃ SỬA SCHEMA
+# DB LOGGING (SQLite)
 # -------------------------
 DB_PATH = "travel_chatbot_logs.db"
 
@@ -222,9 +135,7 @@ def init_db():
             city TEXT,
             start_date TEXT,
             end_date TEXT,
-            intent TEXT,
-            rag_used BOOLEAN DEFAULT 0,
-            sources_count INTEGER DEFAULT 0
+            intent TEXT
         )
     """)
     conn.commit()
@@ -232,195 +143,227 @@ def init_db():
 
 init_db()
 
-def log_interaction(user_input, city=None, start_date=None, end_date=None, intent=None, rag_used=False, sources_count=0):
+def log_interaction(user_input, city=None, start_date=None, end_date=None, intent=None):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("""
-        INSERT INTO interactions (timestamp, user_input, city, start_date, end_date, intent, rag_used, sources_count)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO interactions (timestamp, user_input, city, start_date, end_date, intent)
+        VALUES (?, ?, ?, ?, ?, ?)
     """, (datetime.utcnow().isoformat(), user_input, city,
           start_date.isoformat() if start_date else None,
           end_date.isoformat() if end_date else None,
-          intent, rag_used, sources_count))
+          intent))
     conn.commit()
     conn.close()
 
 # -------------------------
-# Optional: seeding vietnam_travel collection from CSV
+# CHROMA (safe init)
 # -------------------------
-def seed_vietnam_travel_from_csv(path="data/vietnam_travel_docs.csv"):
-    if chroma_travel_col is None:
-        print("Chroma travel collection not ready")
-        return False
-    if not os.path.exists(path):
-        print("Seed file not found:", path)
-        return False
+def safe_get_collection(chroma_client, name, expected_dim=None):
+    """
+    Get or create collection; if collection exists but embedding-dimension mismatches expected_dim,
+    delete and recreate so new collection uses the current embedding dimension.
+    expected_dim: integer (e.g. 1536) or None to skip check.
+    """
+    if chroma_client is None:
+        return None
     try:
+        # get_or_create_collection is convenient but some versions behave differently.
+        try:
+            col = chroma_client.get_or_create_collection(name)
+        except Exception:
+            # fallback
+            try:
+                col = chroma_client.get_collection(name)
+            except Exception:
+                col = chroma_client.create_collection(name)
+        # Try to inspect known attribute 'dimension'
+        col_dim = None
+        try:
+            col_dim = getattr(col, "dimension", None)
+        except Exception:
+            col_dim = None
+        # Some chroma versions don't expose 'dimension' — skip check then
+        if expected_dim and col_dim and col_dim != expected_dim:
+            try:
+                chroma_client.delete_collection(name)
+            except Exception:
+                pass
+            # recreate clean
+            try:
+                col = chroma_client.create_collection(name)
+            except Exception:
+                col = chroma_client.get_or_create_collection(name)
+        return col
+    except Exception as e:
+        print(f"[WARN] safe_get_collection error for {name}: {e}")
+        try:
+            return chroma_client.get_or_create_collection(name)
+        except Exception:
+            return None
+
+# preload intents
+def preload_intents():
+    if chroma_intent_col is None or embedding_client is None:
+        return
+    try:
+        samples = [
+            ("Thời tiết ở {city} tuần tới?", {"intent":"weather_query"}),
+            ("Lịch trình 3 ngày ở {city}", {"intent":"itinerary_request"}),
+            ("Đặc sản {city}", {"intent":"food_query"}),
+            ("Gợi ý nhà hàng ở {city}", {"intent":"restaurant_query"})
+        ]
         docs = []
         metas = []
         ids = []
-        import csv
-        with open(path, newline='', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                text = row.get("text") or row.get("description") or ""
-                docs.append(text)
-                metas.append({"title": row.get("title",""), "city": row.get("city",""), "source": row.get("source","")})
-                ids.append(row.get("id") or f"doc_{uuid.uuid4().hex[:8]}")
-        chroma_travel_col.add(documents=docs, metadatas=metas, ids=ids)
-        print(f"Seeded {len(docs)} docs to vietnam_travel")
-        return True
-    except Exception as e:
-        print("Seed error:", e)
-        return False
-
-# -------------------------
-# EMBEDDING LOCAL FUNCTION
-# -------------------------
-def get_embedding_local(text):
-    """
-    Trả về embedding sử dụng model local all-MiniLM-L6-v2 (384 dimensions)
-    """
-    if embedding_model is None:
-        return None
-    try:
-        # Chuẩn hóa text
-        if not text or not isinstance(text, str):
-            return None
-        
-        # Encode text thành embedding
-        embedding = embedding_model.encode(text)
-        
-        # Convert numpy array to list
-        if hasattr(embedding, 'tolist'):
-            return embedding.tolist()
-        return list(embedding)
-    except Exception as e:
-        print(f"[WARN] Local embedding failed: {e}")
-        return None
-
-# -------------------------
-# CHROMA (RAG + Memory + Intent) INIT
-# -------------------------
-
-def safe_get_collection(client, name, expected_dim=384):
-    """
-    Create or get a Chroma collection safely.
-    Auto recreate collection if dimension mismatch or corruption occurs.
-    Compatible with Chroma v1.2+ PersistentClient.
-    """
-    try:
-        col = None
+        for i, (t, meta) in enumerate(samples):
+            docs.append(t)
+            metas.append(meta)
+            ids.append(f"intent_sample_{i}")
         try:
-            col = client.get_collection(name)
+            chroma_intent_col.add(documents=docs, metadatas=metas, ids=ids)
         except Exception:
-            # if get_collection not available, try get_or_create_collection
-            try:
-                col = client.get_or_create_collection(name=name)
-            except Exception:
-                pass
-        if col is None:
-            try:
-                col = client.create_collection(name=name)
-            except Exception:
-                # fallback to get_or_create
-                try:
-                    col = client.get_or_create_collection(name=name)
-                except Exception:
-                    return None
-        # Probe dimension by attempting a harmless query with expected_dim; delete if mismatch
-        try:
-            test_emb = [0.0] * expected_dim
-            try:
-                # newer chroma expects embeddings param name 'query_embeddings' or 'embeddings' depending on version
-                col.query(query_embeddings=[test_emb], n_results=1)
-            except Exception as qe:
-                msg = str(qe).lower()
-                if "dimension" in msg or "expected" in msg:
-                    try:
-                        print(f"🧹 Deleting collection {name} due to embedding-dimension mismatch ({qe})")
-                        client.delete_collection(name=name)
-                        # recreate
-                        col = client.create_collection(name=name)
-                    except Exception as de:
-                        print(f"[WARN] Failed deleting/recreating collection {name}: {de}")
-        except Exception:
-            pass
-        return col
+            # fallback: add without explicit ids
+            chroma_intent_col.add(documents=docs, metadatas=metas)
     except Exception as e:
-        print(f"[WARN] safe_get_collection failed for {name}: {e}")
-        return None
+        print(f"[WARN] preload intents: {e}")
+
+# try:
+#     preload_intents()
+# except Exception:
+#     pass
 
 def init_chroma():
     """
-    Initialize Chroma persistent client and ensure collections exist.
-    Compatible with Chroma v1.2+ using PersistentClient.
+    Robust Chroma init:
+    - ensure settings param is passed correctly (settings=ChromaSettings(...))
+    - detect existing collections and delete any whose embedding-dimension != EXPECTED_DIM
+    - create/get collections we need and return them
     """
-    global chroma_client, chroma_travel_col, chroma_memory_col, chroma_intent_col
-    EXPECTED_DIM = 384  # ĐÃ THAY ĐỔI: all-MiniLM-L6-v2 có 384 dimensions
-    
-    # persist dir (project-local)
-    persist_dir = os.path.join(os.getcwd(), "chromadb_data")
+    # create client with persist dir
     try:
-        # Use PersistentClient for new Chroma versions
-        from chromadb import PersistentClient
-        # create or reuse client in st.session_state
-        if "chroma_client" not in st.session_state or st.session_state.get("chroma_client") is None:
-            st.session_state["chroma_client"] = PersistentClient(path=persist_dir)
-            print("[INIT] Created PersistentClient for Chroma at", persist_dir)
-        else:
-            print("[DEBUG] Reusing existing PersistentClient in session_state")
-        chroma_client = st.session_state["chroma_client"]
+        chroma_client = ChromaClient(
+            settings=ChromaSettings(
+                chroma_db_impl="duckdb+parquet",
+                persist_directory=CHROMA_PERSIST_DIR
+            )
+        )
     except Exception as e:
-        print(f"[WARN] Failed to init PersistentClient: {e}")
+        print(f"[WARN] ChromaClient init with settings failed: {e}. Falling back to default client.")
         try:
-            # fallback: try to use PersistentClient directly without session_state
-            chroma_client = PersistentClient(path=persist_dir)
+            chroma_client = ChromaClient()
         except Exception as e2:
-            print(f"[ERROR] PersistentClient fallback failed: {e2}")
+            print(f"[ERROR] ChromaClient fallback failed: {e2}")
             return None, None, None, None
-    # --- Force scan and delete any 1536-dimension collections ---
-    try:
-        for col in chroma_client.list_collections():
-            cname = getattr(col, "name", str(col))
-            try:
-                emb = [0.0] * EXPECTED_DIM
-                col.query(query_embeddings=[emb], n_results=1)
-            except Exception as qe:
-                if "1536" in str(qe):
-                    print(f"🧹 Force deleting old collection {cname} (1536-dim detected)")
-                    try:
-                        chroma_client.delete_collection(name=cname)
-                    except Exception as de:
-                        print(f"[WARN] Could not delete old collection {cname}: {de}")
-    except Exception as e:
-        print(f"[WARN] Force cleanup skipped: {e}")
 
-    # ensure persist dir exists
+    EXPECTED_DIM = 1536  # dimension of text-embedding-3-small
+
+    # --- Ensure persist dir exists (for clarity) ---
+    os.makedirs(CHROMA_PERSIST_DIR, exist_ok=True)
+    abs_dir = os.path.abspath(CHROMA_PERSIST_DIR)
+    print(f"📁 Chroma persist directory: {abs_dir}")
     try:
-        os.makedirs(persist_dir, exist_ok=True)
+        st.sidebar.markdown(f"🧠 **Chroma DB:** `{abs_dir}`")
     except Exception:
         pass
 
-    # create/get our important collections
+    # --- List all existing collections and delete those with mismatched dimension ---
+    try:
+        # list_collections usually returns list of dicts with 'name' field
+        existing = []
+        try:
+            existing = chroma_client.list_collections()
+        except Exception:
+            # older/newer chroma versions may have different API - try attribute
+            try:
+                existing = chroma_client.list_collections()
+            except Exception:
+                existing = []
+
+        # normalize to list of names
+        names = []
+        for item in existing:
+            if isinstance(item, dict) and item.get("name"):
+                names.append(item["name"])
+            elif isinstance(item, str):
+                names.append(item)
+            else:
+                # item might be Collection object with .name
+                try:
+                    n = getattr(item, "name", None)
+                    if n:
+                        names.append(n)
+                except Exception:
+                    pass
+
+        # Candidate names to protect/delete (also include legacy names)
+        candidate_names = set(names)  # any collection present
+        # also consider legacy names we care about
+        candidate_names.update(["vietnam_travel", "chat_memory", "intent_bank",
+                                "vietnam_travel_v2", "chat_memory_v2", "intent_bank_v2"])
+
+        for cname in list(candidate_names):
+            try:
+                col = chroma_client.get_collection(cname)
+            except Exception:
+                # collection may not exist or API varies
+                continue
+            try:
+                # Try to probe dimension: call query with test embedding of EXPECTED_DIM.
+                # If collection expects a different dim, query should raise error mentioning dimension.
+                test_emb = [0.0] * EXPECTED_DIM
+                try:
+                    # do a harmless query
+                    col.query(query_embeddings=[test_emb], n_results=1)
+                    # if no exception -> dimension likely matches EXPECTED_DIM
+                except Exception as qe:
+                    msg = str(qe).lower()
+                    if "dimension" in msg or "expected" in msg:
+                        print(f"🧹 Deleting collection {cname} due to embedding-dimension mismatch (error: {qe})")
+                        try:
+                            chroma_client.delete_collection(cname)
+                        except Exception as de:
+                            print(f"[WARN] Failed deleting collection {cname}: {de}")
+                    else:
+                        # unknown error - ignore for now
+                        pass
+            except Exception as e:
+                # fallback: if we can inspect col.dimension attribute and it exists
+                try:
+                    col_dim = getattr(col, "dimension", None)
+                    if col_dim and col_dim != EXPECTED_DIM:
+                        print(f"🧹 Deleting collection {cname} (col.dimension={col_dim} != {EXPECTED_DIM})")
+                        try:
+                            chroma_client.delete_collection(cname)
+                        except Exception as de:
+                            print(f"[WARN] Failed deleting collection {cname}: {de}")
+                except Exception:
+                    pass
+    except Exception as e:
+        print(f"[WARN] Error when scanning/deleting old collections: {e}")
+
+    # --- create/get desired collections safely ---
     travel_col = safe_get_collection(chroma_client, "vietnam_travel_v2", expected_dim=EXPECTED_DIM)
     memory_col = safe_get_collection(chroma_client, "chat_memory_v2", expected_dim=EXPECTED_DIM)
     intent_col = safe_get_collection(chroma_client, "intent_bank_v2", expected_dim=EXPECTED_DIM)
 
     print("✅ Chroma collections ready (or created):", 
           f"travel={'OK' if travel_col else 'NO'}, memory={'OK' if memory_col else 'NO'}, intent={'OK' if intent_col else 'NO'}")
-    print(f"✅ Chroma initialized: travel={bool(travel_col)}, memory={bool(memory_col)}, intent={bool(intent_col)}")
     return chroma_client, travel_col, memory_col, intent_col
 
-# --- Initialize Chroma client and collections once (and store in session_state/global) ---
+
+# --- Khởi tạo Chroma ngay khi khởi động ---
 try:
     chroma_client, chroma_travel_col, chroma_memory_col, chroma_intent_col = init_chroma()
+    preload_intents()  # nạp sẵn intent mẫu
 except Exception as e:
     chroma_client = chroma_travel_col = chroma_memory_col = chroma_intent_col = None
-    print(f"[WARN] init_chroma() failed: {e}")
+    print(f"[WARN] Không thể khởi tạo Chroma: {e}")
+
+
 
 # -------------------------
-# UTILITIES: days extraction (original logic)
+# UTILITIES: days extraction
 # -------------------------
 def extract_days_from_text(user_text, start_date=None, end_date=None):
     if start_date and end_date:
@@ -476,13 +419,9 @@ def show_map(lat, lon, zoom=8, title=""):
     if lat is None or lon is None:
         st.info("Không có dữ liệu toạ độ để hiển thị bản đồ.")
         return
-
     lat, lon = float(lat), float(lon)
-
     st.write(f"**Vị trí:** {title} ({lat:.5f}, {lon:.5f})")
-
     view_state = pdk.ViewState(latitude=lat, longitude=lon, zoom=zoom)
-
     layer = pdk.Layer(
         "ScatterplotLayer",
         data=pd.DataFrame([{"lat": lat, "lon": lon}]),
@@ -494,7 +433,6 @@ def show_map(lat, lon, zoom=8, title=""):
         pickable=True,
         opacity=0.9,
     )
-
     marker_layer = pdk.Layer(
         "TextLayer",
         data=pd.DataFrame([{"lat": lat, "lon": lon, "name": "📍"}]),
@@ -504,18 +442,16 @@ def show_map(lat, lon, zoom=8, title=""):
         get_color=[200, 30, 30],
         billboard=True,
     )
-
     deck = pdk.Deck(
         layers=[layer, marker_layer],
         initial_view_state=view_state,
         map_style="https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
         tooltip={"text": title or "Vị trí"},
     )
-
     st.pydeck_chart(deck)
 
 # -------------------------
-# WEATHER (OpenWeatherMap) with AI fallback on location
+# WEATHER (OpenWeatherMap) with AI fallback
 # -------------------------
 def resolve_city_via_ai(user_text):
     if not client:
@@ -548,12 +484,10 @@ Câu: "{user_text}"
 def get_weather_forecast(city_name, start_date=None, end_date=None, user_text=None):
     if not OPENWEATHERMAP_API_KEY:
         return "⚠️ Thiếu OpenWeatherMap API Key."
-    
     if start_date is None or end_date is None:
         today = datetime.now().date()
         start_date = datetime.combine(today, datetime.min.time())
         end_date = datetime.combine(today + timedelta(days=3), datetime.min.time())
-    
     try:
         def _fetch_weather(city):
             url = f"http://api.openweathermap.org/data/2.5/forecast?q={city}&appid={OPENWEATHERMAP_API_KEY}&lang=vi&units=metric"
@@ -642,7 +576,7 @@ def get_food_images(food_list):
     return images
 
 # -------------------------
-# RESTAURANTS HYBRID (Google Places + CSV fallback)
+# RESTAURANTS HYBRID
 # -------------------------
 def get_restaurants_google(city, api_key, limit=5):
     try:
@@ -684,7 +618,7 @@ def get_restaurants(city, limit=5):
     return get_local_restaurants(city, limit)
 
 # -------------------------
-# FOOD AI ASSISTANT (CSV + GPT fallback)
+# FOOD AI ASSISTANT
 # -------------------------
 def re_split_foods(s):
     for sep in [",", "|", ";"]:
@@ -739,7 +673,7 @@ def get_local_foods_with_fallback(city):
     return foods
 
 # -------------------------
-# SUGGESTIONS / COST / PHOTOSPOTS
+# SUGGESTIONS / COST
 # -------------------------
 def estimate_cost(city, days=3, people=1, style="trung bình"):
     mapping = {"tiết kiệm": 400000, "trung bình": 800000, "cao cấp": 2000000}
@@ -798,63 +732,71 @@ Message: "{user_text}"
         return None, None, None
 
 # -------------------------
-# RAG / Chroma helper functions
+# RAG / Chroma helper functions (fixed includes)
 # -------------------------
+def get_embedding_openai(text):
+    """
+    Return embedding vector using embedding_client (text-embedding-3-small).
+    """
+    if not embedding_client:
+        return None
+    try:
+        emb_resp = embedding_client.embeddings.create(model="text-embedding-3-small", input=text)
+        return emb_resp.data[0].embedding
+    except Exception as e:
+        print(f"[WARN] embedding failed: {e}")
+        return None
+
 def rag_query_top_k(user_text, k=5):
     """
-    Lấy top-k đoạn văn từ collection vietnam_travel bằng embedding.
-    Trả về list dict và context string.
+    Query vietnam_travel top-k related docs using embedding.
+    Returns (docs_list, context_text)
     """
-    if chroma_travel_col is None or client is None:
+    if chroma_travel_col is None or embedding_client is None:
         return [], ""
-    emb = get_embedding_local(user_text)  # ĐÃ THAY ĐỔI: dùng embedding local
+    emb = get_embedding_openai(user_text)
     if emb is None:
         return [], ""
     try:
+        # include only allowed items
         res = chroma_travel_col.query(query_embeddings=[emb], n_results=k, include=["documents","metadatas","distances"])
         docs = []
-        
-        # FIX: Properly handle ChromaDB response structure
-        docs_texts = res.get("documents", [[]])
-        if docs_texts and isinstance(docs_texts, list):
-            docs_texts = docs_texts[0] if docs_texts and isinstance(docs_texts[0], list) else docs_texts
-            
-        metadatas = res.get("metadatas", [[]])
-        if metadatas and isinstance(metadatas, list):
-            metadatas = metadatas[0] if metadatas and isinstance(metadatas[0], list) else metadatas
-            
-        ids = res.get("ids", [[]])
-        if ids and isinstance(ids, list):
-            ids = ids[0] if ids and isinstance(ids[0], list) else ids
-            
-        distances = res.get("distances", [[]])
-        if distances and isinstance(distances, list):
-            distances = distances[0] if distances and isinstance(distances[0], list) else distances
-
-        # Ensure all are lists and have same length
-        docs_texts = docs_texts or []
-        metadatas = metadatas or [{}] * len(docs_texts)
-        ids = ids or [f"doc_{i}" for i in range(len(docs_texts))]
-        distances = distances or [None] * len(docs_texts)
-
+        # parse robustly
+        docs_texts = []
+        metadatas = []
+        distances = []
+        try:
+            docs_texts = res.get("documents", [[]])[0]
+        except Exception:
+            docs_texts = res.get("documents", [])
+        try:
+            metadatas = res.get("metadatas", [[]])[0] if res.get("metadatas") else []
+        except Exception:
+            metadatas = res.get("metadatas", [])
+        try:
+            distances = res.get("distances", [[]])[0] if res.get("distances") else []
+        except Exception:
+            distances = res.get("distances", [])
+        # IDs may be returned separately (without requesting "ids"); try to get them if present
+        ids = []
+        try:
+            ids = res.get("ids", [[]])[0] if res.get("ids") else []
+        except Exception:
+            ids = []
         for i, txt in enumerate(docs_texts):
-            meta = metadatas[i] if i < len(metadatas) else {}
-            doc_id = ids[i] if i < len(ids) else f"doc_{i}"
-            distance = distances[i] if i < len(distances) else None
-            
+            doc_id = ids[i] if i < len(ids) else (metadatas[i].get("id") if i < len(metadatas) and isinstance(metadatas[i], dict) and metadatas[i].get("id") else f"doc_{uuid.uuid4().hex[:8]}")
             docs.append({
                 "id": doc_id,
                 "text": txt,
-                "metadata": meta,
-                "distance": distance
+                "metadata": metadatas[i] if i < len(metadatas) else {},
+                "distance": distances[i] if i < len(distances) else None
             })
-            
         context_parts = []
         for d in docs:
-            src = d["metadata"].get("source", "") if isinstance(d.get("metadata"), dict) else ""
+            src = d.get("metadata", {}).get("source", "")
             context_parts.append(f"[src:{d['id']}{('|' + src) if src else ''}] {d['text'][:1200]}")
         context = "\n\n".join(context_parts)
-        st.session_state["last_rag_docs"] = docs  # lưu nguồn vào session
+        st.session_state["last_rag_docs"] = docs
         return docs, context
     except Exception as e:
         print(f"[WARN] chroma query error: {e}")
@@ -862,71 +804,42 @@ def rag_query_top_k(user_text, k=5):
 
 def add_to_memory_collection(text, role="user", city=None, extra_meta=None):
     """
-    Lưu embedding + text vào collection chat_memory.
+    Add text + metadata to chat_memory (with embedding).
     """
-    if chroma_memory_col is None or client is None:
+    if chroma_memory_col is None or embedding_client is None:
         return
     try:
-        emb = get_embedding_local(text)  # ĐÃ THAY ĐỔI: dùng embedding local
+        emb = get_embedding_openai(text)
         doc_id = f"mem_{int(time.time()*1000)}_{uuid.uuid4().hex[:8]}"
         meta = {"role": role, "city": city or "", "timestamp": datetime.utcnow().isoformat()}
         if extra_meta and isinstance(extra_meta, dict):
             meta.update(extra_meta)
-        # Some chroma versions accept embeddings param, others compute embedding on add
         try:
             chroma_memory_col.add(documents=[text], metadatas=[meta], ids=[doc_id], embeddings=[emb])
         except TypeError:
-            # fallback without embeddings param
             chroma_memory_col.add(documents=[text], metadatas=[meta], ids=[doc_id])
     except Exception as e:
         print(f"[WARN] add to memory failed: {e}")
 
 def recall_recent_memories(user_text, k=5):
-    """
-    Truy vấn chat_memory bằng embedding user_text để lấy các đoạn hội thoại gần nhất.
-    """
-    if chroma_memory_col is None or client is None:
+    if chroma_memory_col is None or embedding_client is None:
         return []
-    emb = get_embedding_local(user_text)  # ĐÃ THAY ĐỔI: dùng embedding local
+    emb = get_embedding_openai(user_text)
     if emb is None:
         return []
     try:
         res = chroma_memory_col.query(query_embeddings=[emb], n_results=k, include=["documents","metadatas","distances"])
+        docs_texts = res.get("documents", [[]])[0] if res.get("documents") else []
+        metadatas = res.get("metadatas", [[]])[0] if res.get("metadatas") else []
+        distances = res.get("distances", [[]])[0] if res.get("distances") else []
+        ids = res.get("ids", [[]])[0] if res.get("ids") else []
         items = []
-        
-        # FIX: Properly handle ChromaDB response structure
-        docs_texts = res.get("documents", [[]])
-        if docs_texts and isinstance(docs_texts, list):
-            docs_texts = docs_texts[0] if docs_texts and isinstance(docs_texts[0], list) else docs_texts
-        
-        metadatas = res.get("metadatas", [[]])
-        if metadatas and isinstance(metadatas, list):
-            metadatas = metadatas[0] if metadatas and isinstance(metadatas[0], list) else metadatas
-            
-        ids = res.get("ids", [[]])
-        if ids and isinstance(ids, list):
-            ids = ids[0] if ids and isinstance(ids[0], list) else ids
-            
-        distances = res.get("distances", [[]])
-        if distances and isinstance(distances, list):
-            distances = distances[0] if distances and isinstance(distances[0], list) else distances
-
-        # Ensure all are lists and have same length
-        docs_texts = docs_texts or []
-        metadatas = metadatas or [{}] * len(docs_texts)
-        ids = ids or [f"mem_{i}" for i in range(len(docs_texts))]
-        distances = distances or [None] * len(docs_texts)
-
         for i, t in enumerate(docs_texts):
-            meta = metadatas[i] if i < len(metadatas) else {}
-            item_id = ids[i] if i < len(ids) else f"mem_{i}"
-            distance = distances[i] if i < len(distances) else None
-            
             items.append({
-                "id": item_id, 
-                "text": t, 
-                "meta": meta, 
-                "distance": distance
+                "id": ids[i] if i < len(ids) else f"mem_{i}",
+                "text": t,
+                "meta": metadatas[i] if i < len(metadatas) else {},
+                "distance": distances[i] if i < len(distances) else None
             })
         return items
     except Exception as e:
@@ -934,65 +847,38 @@ def recall_recent_memories(user_text, k=5):
         return []
 
 def get_intent_via_chroma(user_text, threshold=0.2):
-    """
-    Truy vấn intent_bank tìm intent gần nhất. Nếu distance < threshold => trả về intent id.
-    """
-    if chroma_intent_col is None or client is None:
+    if chroma_intent_col is None or embedding_client is None:
         return None
-    emb = get_embedding_local(user_text)  # ĐÃ THAY ĐỔI: dùng embedding local
+    emb = get_embedding_openai(user_text)
     if emb is None:
         return None
     try:
         res = chroma_intent_col.query(query_embeddings=[emb], n_results=1, include=["metadatas","distances"])
-        
-        # FIX: Properly handle ChromaDB response structure
-        distances = res.get("distances", [[]])
-        if distances and isinstance(distances, list):
-            distances = distances[0] if distances and isinstance(distances[0], list) else distances
-            
-        metadatas = res.get("metadatas", [[]])
-        if metadatas and isinstance(metadatas, list):
-            metadatas = metadatas[0] if metadatas and isinstance(metadatas[0], list) else metadatas
-
-        if distances and len(distances) > 0 and distances[0] is not None and distances[0] < threshold:
-            meta = metadatas[0] if metadatas and len(metadatas) > 0 else {}
-            return meta.get("intent") if isinstance(meta, dict) else None
+        distances = res.get("distances", [[]])[0] if res.get("distances") else []
+        metadatas = res.get("metadatas", [[]])[0] if res.get("metadatas") else []
+        ids = res.get("ids", [[]])[0] if res.get("ids") else []
+        if distances and distances[0] is not None and distances[0] < threshold:
+            return metadatas[0].get("intent") if isinstance(metadatas[0], dict) else None
     except Exception as e:
         print(f"[WARN] intent chroma error: {e}")
     return None
 
 def recommend_similar_trips(city, k=3):
-    """
-    Tìm trong chat_memory các trips tương tự dựa trên city (hoặc mô tả).
-    """
-    if chroma_memory_col is None:
+    if chroma_memory_col is None or embedding_client is None:
         return []
-    emb = get_embedding_local(city)  # ĐÃ THAY ĐỔI: dùng embedding local
+    emb = get_embedding_openai(city)
     if emb is None:
         return []
     try:
-        res = chroma_memory_col.query(query_embeddings=[emb], n_results=10, include=["documents","metadatas","distances"])
-        
-        # FIX: Properly handle ChromaDB response structure
-        docs_texts = res.get("documents", [[]])
-        if docs_texts and isinstance(docs_texts, list):
-            docs_texts = docs_texts[0] if docs_texts and isinstance(docs_texts[0], list) else docs_texts
-            
-        metadatas = res.get("metadatas", [[]])
-        if metadatas and isinstance(metadatas, list):
-            metadatas = metadatas[0] if metadatas and isinstance(metadatas[0], list) else metadatas
-            
-        ids = res.get("ids", [[]])
-        if ids and isinstance(ids, list):
-            ids = ids[0] if ids and isinstance(ids[0], list) else ids
-
+        res = chroma_memory_col.query(query_embeddings=[emb], n_results=10, include=["metadatas","documents","distances"])
+        docs = res.get("documents", [[]])[0] if res.get("documents") else []
+        metas = res.get("metadatas", [[]])[0] if res.get("metadatas") else []
+        ids = res.get("ids", [[]])[0] if res.get("ids") else []
         recommendations = []
-        for i, m in enumerate(metadatas):
+        for i, m in enumerate(metas):
             rec_city = m.get("city") if isinstance(m, dict) else None
             if rec_city and rec_city.lower() != city.lower() and rec_city not in [r.get("city") for r in recommendations]:
-                doc = docs_texts[i] if i < len(docs_texts) else ""
-                rec_id = ids[i] if i < len(ids) else None
-                recommendations.append({"city": rec_city, "meta": m, "doc": doc, "id": rec_id})
+                recommendations.append({"city": rec_city, "meta": m, "doc": docs[i] if i < len(docs) else "", "id": ids[i] if i < len(ids) else None})
             if len(recommendations) >= k:
                 break
         return recommendations
@@ -1000,35 +886,9 @@ def recommend_similar_trips(city, k=3):
         print(f"[WARN] recommend error: {e}")
         return []
 
-# preload intents samples
-def preload_intents():
-    if chroma_intent_col is None or client is None:
-        return
-    try:
-        samples = [
-            ("Thời tiết ở {city} tuần tới?", {"intent":"weather_query"}),
-            ("Lịch trình 3 ngày ở {city}", {"intent":"itinerary_request"}),
-            ("Đặc sản {city}", {"intent":"food_query"}),
-            ("Gợi ý nhà hàng ở {city}", {"intent":"restaurant_query"})
-        ]
-        docs = []
-        metas = []
-        ids = []
-        for i, (t, meta) in enumerate(samples):
-            docs.append(t)
-            metas.append(meta)
-            ids.append(f"intent_sample_{i}")
-        chroma_intent_col.add(documents=docs, metadatas=metas, ids=ids)
-    except Exception as e:
-        print(f"[WARN] preload intents: {e}")
-
-try:
-    preload_intents()
-except Exception:
-    pass
 
 # -------------------------
-# HERO / HEADER SECTION
+# HERO / UI
 # -------------------------
 def render_hero_section(default_city_hint="Hội An, Đà Nẵng, Hà Nội..."):
     with st.form(key='hero_search_form', clear_on_submit=False):
@@ -1053,7 +913,7 @@ def render_hero_section(default_city_hint="Hội An, Đà Nẵng, Hà Nội...")
             st.rerun()
 
 # -------------------------
-# VOICE HELPERS
+# VOICE helpers
 # -------------------------
 def detect_audio_type_header(b):
     if len(b) < 12:
@@ -1096,42 +956,26 @@ def write_temp_file_and_convert_to_wav(audio_bytes):
             raise RuntimeError(f"Không thể chuyển đổi audio sang WAV: {e} | {e2}")
 
 # -------------------------
-# TOPIC CLASSIFIER (OpenAI) - dùng để kiểm tra nếu bạn muốn reject non-travel
+# Topic classifier (OpenAI) - optional
 # -------------------------
 def is_travel_related_via_gpt(user_text):
-    """
-    Dùng OpenAI để xác định xem câu hỏi có liên quan đến du lịch không.
-    Trả về True nếu liên quan, False nếu không.
-    """
     if not client:
-        return True  # nếu không có API key thì cho qua luôn
-
+        return True
     try:
         prompt = f"""
 Bạn là bộ phân loại chủ đề thông minh.
 Hãy xác định xem câu sau có liên quan đến lĩnh vực *du lịch Việt Nam* hay không.
 
-Các chủ đề được coi là liên quan bao gồm:
-- địa điểm, thành phố, tỉnh, danh lam thắng cảnh
-- thời tiết, khí hậu
-- lịch trình du lịch, tour, chi phí, gợi ý điểm đến
-- món ăn địa phương, đặc sản, nhà hàng
-- khách sạn, homestay, resort
-- sự kiện, lễ hội, văn hoá vùng miền
-
-Nếu KHÔNG thuộc những chủ đề trên (ví dụ: lập trình, tài chính, thể thao, học tập...), hãy trả về JSON:
-{{"related": false}}
-
-Nếu CÓ liên quan, trả về JSON:
-{{"related": true}}
+Nếu KHÔNG thuộc trả về JSON: {{"related": false}}
+Nếu CÓ liên quan trả về JSON: {{"related": true}}
 
 Câu người dùng: "{user_text}"
 """
         response = client.chat.completions.create(
             model=DEPLOYMENT_NAME,
-            messages=[{"role": "system", "content": prompt}],
+            messages=[{"role":"system","content":prompt}],
             temperature=0,
-            max_tokens=30,
+            max_tokens=30
         )
         text = response.choices[0].message.content.strip().lower()
         if '"related": true' in text:
@@ -1139,8 +983,8 @@ Câu người dùng: "{user_text}"
         if '"related": false' in text:
             return False
     except Exception as e:
-        print(f"[WARN] Lỗi phân loại chủ đề: {e}")
-    return True  # fallback
+        print(f"[WARN] classifier error: {e}")
+    return True
 
 # -------------------------
 # STREAMLIT UI LAYOUT
@@ -1155,56 +999,26 @@ with st.sidebar:
                                   ["Weather", "Food", "Map", "Photos", "Cost", "Events"],
                                   default=["Weather", "Map","Food", "Photos"])
     st.markdown("---")
-    # st.write("Chọn mức zoom bản đồ:")
-    # map_zoom = st.slider("Zoom (4 = xa, 15 = gần)", 4, 15, 8)
-    # st.markdown("---")
+    st.write("Chọn mức zoom bản đồ:")
+    map_zoom = st.slider("Zoom (4 = xa, 15 = gần)", 4, 15, 8)
+    st.markdown("---")
     st.subheader("🎙️ Voice")
     enable_voice = st.checkbox("Bật nhập liệu bằng giọng nói", value=True)
-    # asr_lang = st.selectbox("Ngôn ngữ nhận dạng", ["vi-VN", "en-US"], index=0)
+    asr_lang = st.selectbox("Ngôn ngữ nhận dạng", ["vi-VN", "en-US"], index=0)
     tts_enable = st.checkbox("🔊 Đọc to phản hồi", value=False)
-    # tts_lang = st.selectbox("Ngôn ngữ TTS", ["vi", "en"], index=0)
+    tts_lang = st.selectbox("Ngôn ngữ TTS", ["vi", "en"], index=0)
     st.caption("Yêu cầu: ffmpeg + internet cho gTTS.")
     st.markdown("---")
-    
     def status_card(title, ok=True):
         cls = "status-ok" if ok else "status-bad"
         icon = "✅" if ok else "⚠️"
         st.markdown(f"<div class='{cls}'>{icon} {title}</div>", unsafe_allow_html=True)
     status_card("OpenWeatherMap", bool(OPENWEATHERMAP_API_KEY))
-    # status_card("Google Places", bool(GOOGLE_PLACES_KEY))
+    status_card("Google Places", bool(GOOGLE_PLACES_KEY))
     status_card("Pixabay", bool(PIXABAY_API_KEY))
-    
-    # Thêm trạng thái ChromaDB
-    chroma_status = chroma_client is not None and chroma_travel_col is not None
-    status_card("ChromaDB RAG", chroma_status)
-    
-    # Thêm trạng thái Embedding Model
-    embedding_status = embedding_model is not None
-    status_card("Embedding Model", embedding_status)
-    
     st.markdown("---")
-    # Nút seed dữ liệu thủ công
-    if st.button("🔄 Seed dữ liệu du lịch", use_container_width=True):
-        try:
-            seed_vietnam_travel_from_csv("data/vietnam_travel_docs.csv")
-            st.success("✅ Đã seed dữ liệu thành công từ [data/vietnam_travel_docs.csv]!")
-        except Exception as e:
-            st.error(f"❌ Lỗi khi seed dữ liệu: {e}")
-
-    # Tự động seed dữ liệu nếu collection trống
-    try:
-        if chroma_travel_col and chroma_travel_col.count() == 0:
-            if seed_vietnam_travel_from_csv("data/vietnam_travel_docs.csv"):
-                st.sidebar.success("✅ Đã tự động seed dữ liệu du lịch")
-            else:
-                st.sidebar.warning("⚠️ Chưa có dữ liệu du lịch. Vui lòng seed thủ công.")
-    except Exception as e:
-        st.sidebar.warning(f"⚠️ Chưa seed được dữ liệu: {e}")
-    st.markdown("---")
-
     st.caption("🍜 Food AI: CSV local dữ liệu + GPT fallback")
-    st.markdown("Version: v1.3 + Voice + RAG + Local Embedding")
-    
+    st.markdown("Version: v1.3 + Voice + RAG")
 
 # initialize session messages
 if "messages" not in st.session_state:
@@ -1212,27 +1026,8 @@ if "messages" not in st.session_state:
 
 with main_tab:
     today = datetime.now().date()
-    if "quicksearch" in st.session_state:
-        qs = st.session_state.quicksearch
-        city_qs = qs["city"]; start_qs = qs["start"]; end_qs = qs["end"]
-        people_qs = qs["people"]; style_qs = qs["style"]
-        st.markdown(f"### ✈️ Gợi ý cho chuyến đi {city_qs} ({start_qs} – {end_qs})")
-        weather_qs = get_weather_forecast(city_qs, start_qs, end_qs)
-        cost_qs = estimate_cost(city_qs, (end_qs - start_qs).days + 1, people_qs, style_qs)
-        colA, colB = st.columns(2)
-        with colA:
-            st.markdown(f"**{weather_qs}**")
-            st.markdown(f"**{cost_qs}**")
-        with colB:
-            img = get_city_image(city_qs)
-            if img:
-                st.image(img, caption=f"🏞️ {city_qs}", use_container_width=True)
-            lat, lon, addr = geocode_city(city_qs)
-            if lat and lon:
-                show_map(lat, lon, zoom=map_zoom, title=addr or city_qs)
-        st.markdown("---")
 
-    # === VOICE INPUT BAR ===
+    # Voice input
     voice_text = None
     if enable_voice:
         audio = mic_recorder(
@@ -1262,7 +1057,7 @@ with main_tab:
                 except Exception as e:
                     st.error(f"Lỗi nhận diện: {e}")
 
-    # --- Hiển thị lại toàn bộ lịch sử cũ ---
+    # show past messages
     for msg in st.session_state.messages:
         if msg["role"] == "user":
             with st.chat_message("user", avatar="🧭"):
@@ -1271,7 +1066,6 @@ with main_tab:
             with st.chat_message("assistant", avatar="🤖"):
                 st.markdown(f"<div class='assistant-bubble'>{msg['content']}</div>", unsafe_allow_html=True)
 
-    # Chat input (gõ phím)
     user_input = st.chat_input("Mời bạn đặt câu hỏi:")
     if "user_input" in st.session_state and st.session_state.user_input:
         user_input = st.session_state.user_input
@@ -1281,14 +1075,13 @@ with main_tab:
             st.markdown(f"<div class='user-message'>{user_input}</div>", unsafe_allow_html=True)
         st.session_state.messages.append({"role": "user", "content": user_input})
 
-        # Optional: reject non-travel topics via GPT classifier
+        # optional classifier reject
         try:
             if not is_travel_related_via_gpt(user_input):
                 msg = "Xin lỗi 😅, tôi chỉ hỗ trợ các câu hỏi liên quan đến **du lịch Việt Nam**, như thời tiết, địa điểm, món ăn, lịch trình..."
                 with st.chat_message("assistant", avatar="🤖"):
                     st.markdown(msg)
                 st.session_state.messages.append({"role": "assistant", "content": msg})
-                # add to memory (optional)
                 try:
                     add_to_memory_collection(user_input, role="user")
                     add_to_memory_collection(msg, role="assistant")
@@ -1296,17 +1089,11 @@ with main_tab:
                     pass
                 st.stop()
         except Exception:
-            # nếu classifier lỗi thì tiếp tục bình thường
             pass
 
         city_guess, start_date, end_date = extract_city_and_dates(user_input)
         days = extract_days_from_text(user_input, start_date, end_date)
-        
-        # Reset các biến tracking
-        rag_used = False
-        sources_count = 0
-        intent_used = None
-        memory_used = False
+        log_interaction(user_input, city_guess, start_date, end_date)
 
         if start_date:
             today = datetime.now().date()
@@ -1340,11 +1127,9 @@ with main_tab:
 
                 assistant_text = ""
                 if client:
-                    # --- RAG + Intent + Memory enhanced generation ---
                     try:
                         detected_intent = get_intent_via_chroma(user_input, threshold=0.18)
                         if detected_intent:
-                            intent_used = detected_intent
                             if detected_intent == "weather_query" and city_guess:
                                 assistant_text = get_weather_forecast(city_guess, start_date, end_date, user_input)
                                 assistant_text += f"\n\n( Nguồn: OpenWeatherMap )"
@@ -1355,14 +1140,10 @@ with main_tab:
                                 days_local = extract_days_from_text(user_input, start_date, end_date)
                                 assistant_text = f"Lịch trình gợi ý cho {city_guess}, {days_local} ngày:\n1) Ngày 1: ...\n2) Ngày 2: ...\n3) Ngày 3: ..."
                             else:
-                                # Unknown or not handled intent -> fallback to full generation
                                 detected_intent = None
-                                intent_used = None
                         if not detected_intent:
                             docs, rag_context = rag_query_top_k(user_input, k=5)
-                            sources_count = len(docs)
                             recent_mem = recall_recent_memories(user_input, k=3)
-                            memory_used = len(recent_mem) > 0
                             recall_text = ""
                             if recent_mem:
                                 recall_parts = []
@@ -1374,14 +1155,13 @@ with main_tab:
 
                             augmentation = "\n\n--- Thông tin tham khảo nội bộ (trích dẫn): ---\n"
                             if rag_context:
-                                rag_used = True
                                 augmentation += rag_context + "\n\n"
                             if recall_text:
                                 augmentation += "\n--- Nhớ gần đây ---\n" + recall_text + "\n\n"
                             augmentation += "--- Khi trả lời, nếu dùng thông tin từ phần trên hãy đánh dấu nguồn như [src:ID] hoặc [mem:ID]. ---\n"
 
                             temp_messages = [{"role":"system", "content": system_prompt + "\n\n" + augmentation}]
-                            temp_messages.extend(st.session_state.messages[-12:])  # keep last 12 msgs
+                            temp_messages.extend(st.session_state.messages[-12:])
                             response = client.chat.completions.create(
                                 model=DEPLOYMENT_NAME,
                                 messages=temp_messages,
@@ -1390,7 +1170,6 @@ with main_tab:
                             )
                             assistant_text = response.choices[0].message.content.strip()
 
-                        # Save to memory
                         try:
                             add_to_memory_collection(user_input, role="user", city=city_guess)
                             add_to_memory_collection(assistant_text, role="assistant", city=city_guess)
@@ -1417,66 +1196,43 @@ with main_tab:
                     time.sleep(0.3)
                     placeholder.empty()
                     with st.container():
-                        # highlight citations like [src:...] or [mem:...]
                         display_text_processed = re.sub(r'(\[src:[^\]]+\])', r'**\1**', assistant_text)
                         display_text_processed = re.sub(r'(\[mem:[^\]]+\])', r'**\1**', display_text_processed)
                         st.markdown("<div class='assistant-bubble'>", unsafe_allow_html=True)
                         st.markdown(display_text_processed)
                         st.markdown("</div>", unsafe_allow_html=True)
-                        
-                        # === HIỂN THỊ NGUỒN THAM KHẢO CHI TIẾT ===
-                        if rag_used or intent_used or memory_used:
-                            st.markdown("---")
-                            st.subheader("🔍 Nguồn tham khảo")
-                            
-                            # Hiển thị thông tin về ChromaDB
-                            if rag_used and sources_count > 0:
-                                st.markdown(f'<div class="source-badge source-chroma">📚 <b>ChromaDB RAG</b>: Sử dụng {sources_count} tài liệu từ cơ sở tri thức du lịch</div>', unsafe_allow_html=True)
-                            
-                            if intent_used:
-                                st.markdown(f'<div class="source-badge source-intent">🎯 <b>Intent Matching</b>: Phát hiện intent "{intent_used}" từ ChromaDB</div>', unsafe_allow_html=True)
-                            
-                            if memory_used:
-                                st.markdown(f'<div class="source-badge source-memory">💭 <b>Memory Recall</b>: Tham khảo hội thoại trước đó từ ChromaDB</div>', unsafe_allow_html=True)
-                            
-                            # Hiển thị chi tiết các tài liệu RAG
-                            if "last_rag_docs" in st.session_state and st.session_state["last_rag_docs"]:
-                                sources = st.session_state["last_rag_docs"]
-                                with st.expander(f"📖 Chi tiết {len(sources)} tài liệu tham khảo"):
-                                    for i, src in enumerate(sources, 1):
-                                        meta = src.get("metadata", {}) or {}
-                                        title = meta.get("title", "Không có tiêu đề")
-                                        city = meta.get("city", "")
-                                        srcname = meta.get("source", "Nội bộ")
-                                        distance = src.get("distance")
-                                        
-                                        st.markdown(f"**{i}. {title}**")
-                                        if city:
-                                            st.caption(f"📍 {city}")
-                                        if srcname:
-                                            st.caption(f"📚 Nguồn: {srcname}")
-                                        if distance is not None:
-                                            st.caption(f"📊 Độ tương đồng: {1 - distance:.3f}")
-                                        st.markdown(f"*{src['text'][:200]}...*")
-                                        st.markdown("---")
 
-                # Log interaction với thông tin RAG
-                log_interaction(user_input, city_guess, start_date, end_date, intent_used, rag_used, sources_count)
+                        # display RAG sources in expander if present
+                        if "last_rag_docs" in st.session_state and st.session_state["last_rag_docs"]:
+                            sources = st.session_state["last_rag_docs"]
+                            with st.expander("📚 Nguồn dữ liệu tham khảo"):
+                                for src in sources:
+                                    meta = src.get("metadata", {}) or {}
+                                    title = meta.get("title", "")
+                                    city = meta.get("city", "")
+                                    srcname = meta.get("source", "")
+                                    display_line = f"- **{src.get('id','-')}**"
+                                    if title:
+                                        display_line += f": *{title}*"
+                                    if city:
+                                        display_line += f" – {city}"
+                                    if srcname:
+                                        display_line += f" _(nguồn: {srcname})_"
+                                    st.markdown(display_line)
 
-                # === TTS (đọc to phản hồi) ===
-                if tts_enable:
-                    try:
-                        tts = gTTS(assistant_text, lang=tts_lang)
-                        bio = io.BytesIO()
-                        tts.write_to_fp(bio)
-                        bio.seek(0)
-                        b64 = base64.b64encode(bio.read()).decode()
-                        st.markdown(
-                            f'<div class="audio-wrapper"><audio autoplay controls><source src="data:audio/mp3;base64,{b64}" type="audio/mp3"></audio></div>',
-                            unsafe_allow_html=True
-                        )
-                    except Exception as e:
-                        st.warning(f"Không thể tạo audio TTS: {e}")
+                    if tts_enable:
+                        try:
+                            tts = gTTS(assistant_text, lang=tts_lang)
+                            bio = io.BytesIO()
+                            tts.write_to_fp(bio)
+                            bio.seek(0)
+                            b64 = base64.b64encode(bio.read()).decode()
+                            st.markdown(
+                                f'<div class="audio-wrapper"><audio autoplay controls><source src="data:audio/mp3;base64,{b64}" type="audio/mp3"></audio></div>',
+                                unsafe_allow_html=True
+                            )
+                        except Exception as e:
+                            st.warning(f"Không thể tạo audio TTS: {e}")
 
                 st.balloons()
             except Exception as e:
@@ -1524,37 +1280,9 @@ with main_tab:
                             addr_text = r.get("address", r.get("formatted_address", ""))
                             maps_url = r.get("maps_url", "")
                             st.markdown(f"- **{name}** {f'• ⭐ {rating}' if rating else ''}  \n  {addr_text}  " + (f"[Bản đồ]({maps_url})" if maps_url else ""))
-                else:
-                    st.info("Không có dữ liệu nhà hàng (CSV/Google Places fallback).")
 
 with analytics_tab:
     st.header("📊 Thống kê truy vấn (gần đây)")
-    
-    # Thêm thống kê RAG - ĐÃ SỬA LỖI
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        # Kiểm tra xem cột có tồn tại không
-        cur = conn.cursor()
-        cur.execute("PRAGMA table_info(interactions)")
-        columns = [col[1] for col in cur.fetchall()]
-        
-        df_logs = pd.read_sql("SELECT * FROM interactions ORDER BY timestamp DESC LIMIT 1000", conn)
-        conn.close()
-        
-        if not df_logs.empty and 'rag_used' in columns:
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                total_rag = df_logs['rag_used'].sum()
-                st.metric("Truy vấn sử dụng RAG", f"{total_rag}/{len(df_logs)}")
-            with col2:
-                avg_sources = df_logs['sources_count'].mean()
-                st.metric("Trung bình nguồn/RAG", f"{avg_sources:.1f}")
-            with col3:
-                rag_rate = (total_rag / len(df_logs)) * 100
-                st.metric("Tỷ lệ sử dụng RAG", f"{rag_rate:.1f}%")
-    except Exception as e:
-        st.warning(f"Không thể load thống kê RAG: {e}")
-    
     with st.expander("🗑️ Xóa lịch sử truy vấn"):
         st.warning("⚠️ Thao tác này sẽ xóa toàn bộ lịch sử truy vấn đã lưu trong cơ sở dữ liệu (SQLite). Không thể hoàn tác.")
         confirm_delete = st.checkbox("Tôi hiểu và muốn xóa toàn bộ lịch sử truy vấn", value=False)
@@ -1571,57 +1299,24 @@ with analytics_tab:
                     st.error(f"⚠️ Lỗi khi xóa dữ liệu: {e}")
         else:
             st.info("👉 Hãy tick vào ô xác nhận trước khi xóa lịch sử.")
-    
     try:
         conn = sqlite3.connect(DB_PATH)
-        # Kiểm tra schema trước khi query
-        cur = conn.cursor()
-        cur.execute("PRAGMA table_info(interactions)")
-        columns = [col[1] for col in cur.fetchall()]
-        
-        # Chỉ chọn các cột tồn tại
-        select_columns = ["timestamp", "user_input", "city"]
-        if 'rag_used' in columns:
-            select_columns.extend(["rag_used", "sources_count"])
-        if 'intent' in columns:
-            select_columns.append("intent")
-            
-        df_logs = pd.read_sql(f"SELECT {', '.join(select_columns)} FROM interactions ORDER BY timestamp DESC LIMIT 1000", conn)
+        df_logs = pd.read_sql("SELECT * FROM interactions ORDER BY timestamp DESC LIMIT 1000", conn)
         conn.close()
-        
         total = int(df_logs.shape[0]) if not df_logs.empty else 0
         st.metric("Tổng tương tác", total)
-        
         if not df_logs.empty:
             df_logs['timestamp_dt'] = pd.to_datetime(df_logs['timestamp'])
             df_logs['date'] = df_logs['timestamp_dt'].dt.date
-            
-            # Biểu đồ sử dụng RAG - chỉ hiển thị nếu có cột rag_used
-            if 'rag_used' in df_logs.columns:
-                rag_series = df_logs.groupby('date').agg({
-                    'rag_used': 'sum',
-                    'timestamp': 'count'
-                }).reset_index()
-                rag_series.columns = ['date', 'rag_queries', 'total_queries']
-                rag_series['non_rag_queries'] = rag_series['total_queries'] - rag_series['rag_queries']
-                
-                fig_rag = px.bar(rag_series, x='date', y=['rag_queries', 'non_rag_queries'], 
-                                title='📈 Sử dụng RAG theo ngày', 
-                                color_discrete_map={'rag_queries': '#2196f3', 'non_rag_queries': '#ff9800'})
-                st.plotly_chart(fig_rag, use_container_width=True)
-            
             series = df_logs.groupby('date').size().reset_index(name='queries')
             fig = px.bar(series, x='date', y='queries', title='📈 Số truy vấn mỗi ngày', color='queries', color_continuous_scale='Blues')
             st.plotly_chart(fig, use_container_width=True)
-            
             top_cities = df_logs['city'].fillna("Unknown").value_counts().reset_index()
             top_cities.columns = ['city', 'count']
             if not top_cities.empty:
                 fig2 = px.bar(top_cities.head(10), x='city', y='count', title='📍 Top địa điểm được hỏi', color='count', color_continuous_scale='Viridis')
                 st.plotly_chart(fig2, use_container_width=True)
-            
-            # Hiển thị chi tiết với thông tin RAG
-            st.dataframe(df_logs)
+            st.dataframe(df_logs[["timestamp", "user_input", "city"]])
         else:
             st.info("Chưa có truy vấn nào được ghi nhận.")
     except Exception as e:
@@ -1629,3 +1324,35 @@ with analytics_tab:
 
 st.markdown("---")
 st.markdown("<div class='small-muted'>Tip: Bạn có thể yêu cầu cụ thể như 'Lịch trình 3 ngày ở Hội An', 'Đặc sản Sapa', hoặc 'Thời tiết Đà Nẵng 2025-10-20 đến 2025-10-22'.</div>", unsafe_allow_html=True)
+
+# -------------------------
+# Seed helper for vietnam_travel (CSV)
+# -------------------------
+def seed_vietnam_travel_from_csv(path="data/vietnam_travel_docs.csv"):
+    if chroma_travel_col is None:
+        print("Chroma travel collection not ready")
+        return
+    if not os.path.exists(path):
+        print("Seed file not found:", path)
+        return
+    try:
+        docs = []
+        metas = []
+        ids = []
+        import csv
+        with open(path, newline='', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                text = row.get("text") or row.get("description") or ""
+                docs.append(text)
+                metas.append({"title": row.get("title",""), "city": row.get("city",""), "source": row.get("source","")})
+                ids.append(row.get("id") or f"doc_{uuid.uuid4().hex[:8]}")
+        try:
+            chroma_travel_col.add(documents=docs, metadatas=metas, ids=ids)
+        except Exception:
+            chroma_travel_col.add(documents=docs, metadatas=metas)
+        print(f"Seeded {len(docs)} docs to vietnam_travel")
+    except Exception as e:
+        print("Seed error:", e)
+
+# End of file

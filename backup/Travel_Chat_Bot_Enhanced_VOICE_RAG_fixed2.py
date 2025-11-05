@@ -1,10 +1,10 @@
-# Travel_Chat_Bot_Enhanced_VOICE_RAG_fixed2.py
+# Travel_Chat_Bot_Enhanced_VOICE_RAG_fixed4.py
 # =================================
 # Mở rộng: RAG (ChromaDB) + long-term memory + intent quick-match + recommendations
 # Giữ lại toàn bộ chức năng gốc (voice, TTS, weather, map, foods, restaurants...)
 #
 # Yêu cầu:
-#   pip install streamlit-mic-recorder SpeechRecognition pydub gTTS chromadb openai geopy pandas pydeck plotly sentence-transformers
+#   pip install streamlit-mic-recorder SpeechRecognition pydub gTTS chromadb openai geopy pandas pydeck plotly
 #   Cài ffmpeg cho pydub
 #
 
@@ -36,40 +36,6 @@ from gtts import gTTS
 from chromadb import PersistentClient
 # NOTE: Replaced Client->PersistentClient for Chroma v1.2+# Chroma v1.2+ no longer uses chromadb.config.Settings
 import uuid
-
-# === THÊM IMPORTS CHO EMBEDDING LOCAL ===
-from sentence_transformers import SentenceTransformer
-import numpy as np
-
-# === KHAI BÁO MODEL EMBEDDING LOCAL ===
-# === KHAI BÁO MODEL EMBEDDING LOCAL ===
-@st.cache_resource
-def load_embedding_model():
-    try:
-        # Thử tải từ thư mục local trước, nếu không có thì tải từ Hugging Face
-        model_path = "data/all-MiniLM-L6-v2"
-        if os.path.exists(model_path) and os.path.isdir(model_path):
-            # Kiểm tra xem thư mục có chứa model không
-            if any(file.endswith('.bin') for file in os.listdir(model_path)):
-                model = SentenceTransformer(model_path)
-                print("✅ Đã tải model embedding local: all-MiniLM-L6-v2")
-                return model
-        
-        # Nếu không có model local, tải từ Hugging Face
-        print("📥 Đang tải model từ Hugging Face...")
-        model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
-        
-        # Lưu model vào thư mục local để lần sau dùng
-        os.makedirs(model_path, exist_ok=True)
-        model.save(model_path)
-        print(f"✅ Đã tải và lưu model vào: {model_path}")
-        return model
-    except Exception as e:
-        print(f"❌ Lỗi khi tải model embedding: {e}")
-        return None
-
-# Load model
-embedding_model = load_embedding_model()
 
 # === Ensure single persistent Chroma client in Streamlit session ===
 CHROMA_PERSIST_DIR = os.getenv("CHROMA_PERSIST_DIR", "chromadb_data")
@@ -190,6 +156,7 @@ DEPLOYMENT_NAME = st.secrets.get("DEPLOYMENT_NAME", "gpt-4o-mini") if hasattr(st
 OPENWEATHERMAP_API_KEY = st.secrets.get("OPENWEATHERMAP_API_KEY", "") if hasattr(st, 'secrets') else os.getenv("OPENWEATHERMAP_API_KEY", "")
 GOOGLE_PLACES_KEY = st.secrets.get("PLACES_API_KEY", "") if hasattr(st, 'secrets') else os.getenv("PLACES_API_KEY", "")
 PIXABAY_API_KEY = st.secrets.get("PIXABAY_API_KEY", "") if hasattr(st, 'secrets') else os.getenv("PIXABAY_API_KEY", "")
+OPENAI_API_KEY_EMBEDDING = st.secrets["OPENAI_API_KEY_EMBEDDING"]
 
 # Chroma persistent dir (tùy chọn)
 CHROMA_PERSIST_DIR = os.getenv("CHROMA_PERSIST_DIR", "chromadb_data")
@@ -199,6 +166,18 @@ if OPENAI_API_KEY:
     client = openai.OpenAI(base_url=OPENAI_ENDPOINT, api_key=OPENAI_API_KEY)
 else:
     client = None
+
+# --- Separate Embedding client (dùng key riêng) ---
+try:
+    OPENAI_API_KEY_EMBEDDING = st.secrets.get("OPENAI_API_KEY_EMBEDDING", None) if hasattr(st, 'secrets') else os.getenv("OPENAI_API_KEY_EMBEDDING", None)
+except Exception:
+    OPENAI_API_KEY_EMBEDDING = os.getenv("OPENAI_API_KEY_EMBEDDING", None)
+
+if OPENAI_API_KEY_EMBEDDING:
+    embedding_client = openai.OpenAI(base_url=OPENAI_ENDPOINT, api_key=OPENAI_API_KEY_EMBEDDING)
+    # print("OPENAI_API_KEY_EMBEDDING: " + OPENAI_API_KEY_EMBEDDING)
+else:
+    embedding_client = client  # fallback nếu chưa có key riêng
 
 ChatBotName = "[Mây Lang Thang]"  # display name
 system_prompt = """
@@ -275,35 +254,10 @@ def seed_vietnam_travel_from_csv(path="data/vietnam_travel_docs.csv"):
         return False
 
 # -------------------------
-# EMBEDDING LOCAL FUNCTION
-# -------------------------
-def get_embedding_local(text):
-    """
-    Trả về embedding sử dụng model local all-MiniLM-L6-v2 (384 dimensions)
-    """
-    if embedding_model is None:
-        return None
-    try:
-        # Chuẩn hóa text
-        if not text or not isinstance(text, str):
-            return None
-        
-        # Encode text thành embedding
-        embedding = embedding_model.encode(text)
-        
-        # Convert numpy array to list
-        if hasattr(embedding, 'tolist'):
-            return embedding.tolist()
-        return list(embedding)
-    except Exception as e:
-        print(f"[WARN] Local embedding failed: {e}")
-        return None
-
-# -------------------------
 # CHROMA (RAG + Memory + Intent) INIT
 # -------------------------
 
-def safe_get_collection(client, name, expected_dim=384):
+def safe_get_collection(client, name, expected_dim=1536):
     """
     Create or get a Chroma collection safely.
     Auto recreate collection if dimension mismatch or corruption occurs.
@@ -357,8 +311,7 @@ def init_chroma():
     Compatible with Chroma v1.2+ using PersistentClient.
     """
     global chroma_client, chroma_travel_col, chroma_memory_col, chroma_intent_col
-    EXPECTED_DIM = 384  # ĐÃ THAY ĐỔI: all-MiniLM-L6-v2 có 384 dimensions
-    
+    EXPECTED_DIM = 1536
     # persist dir (project-local)
     persist_dir = os.path.join(os.getcwd(), "chromadb_data")
     try:
@@ -379,7 +332,7 @@ def init_chroma():
         except Exception as e2:
             print(f"[ERROR] PersistentClient fallback failed: {e2}")
             return None, None, None, None
-    # --- Force scan and delete any 1536-dimension collections ---
+    # --- Force scan and delete any 384-dimension collections ---
     try:
         for col in chroma_client.list_collections():
             cname = getattr(col, "name", str(col))
@@ -387,8 +340,8 @@ def init_chroma():
                 emb = [0.0] * EXPECTED_DIM
                 col.query(query_embeddings=[emb], n_results=1)
             except Exception as qe:
-                if "1536" in str(qe):
-                    print(f"🧹 Force deleting old collection {cname} (1536-dim detected)")
+                if "384" in str(qe):
+                    print(f"🧹 Force deleting old collection {cname} (384-dim detected)")
                     try:
                         chroma_client.delete_collection(name=cname)
                     except Exception as de:
@@ -401,6 +354,10 @@ def init_chroma():
         os.makedirs(persist_dir, exist_ok=True)
     except Exception:
         pass
+    # try:
+    #     # st.sidebar.markdown(f"🧠 **Chroma DB:** `{os.path.abspath(persist_dir)}`")
+    # except Exception:
+    #     pass
 
     # create/get our important collections
     travel_col = safe_get_collection(chroma_client, "vietnam_travel_v2", expected_dim=EXPECTED_DIM)
@@ -800,6 +757,23 @@ Message: "{user_text}"
 # -------------------------
 # RAG / Chroma helper functions
 # -------------------------
+def get_embedding_openai(text):
+    """
+    Trả về embedding list bằng model text-embedding-3-small.
+    Sử dụng embedding_client (có key riêng).
+    """
+    if not embedding_client:
+        return None
+    try:
+        emb_resp = embedding_client.embeddings.create(
+            model="text-embedding-3-small",
+            input=text
+        )
+        return emb_resp.data[0].embedding
+    except Exception as e:
+        print(f"[WARN] embedding failed: {e}")
+        return None
+
 def rag_query_top_k(user_text, k=5):
     """
     Lấy top-k đoạn văn từ collection vietnam_travel bằng embedding.
@@ -807,7 +781,7 @@ def rag_query_top_k(user_text, k=5):
     """
     if chroma_travel_col is None or client is None:
         return [], ""
-    emb = get_embedding_local(user_text)  # ĐÃ THAY ĐỔI: dùng embedding local
+    emb = get_embedding_openai(user_text)
     if emb is None:
         return [], ""
     try:
@@ -867,7 +841,7 @@ def add_to_memory_collection(text, role="user", city=None, extra_meta=None):
     if chroma_memory_col is None or client is None:
         return
     try:
-        emb = get_embedding_local(text)  # ĐÃ THAY ĐỔI: dùng embedding local
+        emb = get_embedding_openai(text)
         doc_id = f"mem_{int(time.time()*1000)}_{uuid.uuid4().hex[:8]}"
         meta = {"role": role, "city": city or "", "timestamp": datetime.utcnow().isoformat()}
         if extra_meta and isinstance(extra_meta, dict):
@@ -887,7 +861,7 @@ def recall_recent_memories(user_text, k=5):
     """
     if chroma_memory_col is None or client is None:
         return []
-    emb = get_embedding_local(user_text)  # ĐÃ THAY ĐỔI: dùng embedding local
+    emb = get_embedding_openai(user_text)
     if emb is None:
         return []
     try:
@@ -939,7 +913,7 @@ def get_intent_via_chroma(user_text, threshold=0.2):
     """
     if chroma_intent_col is None or client is None:
         return None
-    emb = get_embedding_local(user_text)  # ĐÃ THAY ĐỔI: dùng embedding local
+    emb = get_embedding_openai(user_text)
     if emb is None:
         return None
     try:
@@ -967,7 +941,7 @@ def recommend_similar_trips(city, k=3):
     """
     if chroma_memory_col is None:
         return []
-    emb = get_embedding_local(city)  # ĐÃ THAY ĐỔI: dùng embedding local
+    emb = get_embedding_openai(city)
     if emb is None:
         return []
     try:
@@ -1165,29 +1139,17 @@ with st.sidebar:
     # tts_lang = st.selectbox("Ngôn ngữ TTS", ["vi", "en"], index=0)
     st.caption("Yêu cầu: ffmpeg + internet cho gTTS.")
     st.markdown("---")
-    
-    def status_card(title, ok=True):
-        cls = "status-ok" if ok else "status-bad"
-        icon = "✅" if ok else "⚠️"
-        st.markdown(f"<div class='{cls}'>{icon} {title}</div>", unsafe_allow_html=True)
-    status_card("OpenWeatherMap", bool(OPENWEATHERMAP_API_KEY))
-    # status_card("Google Places", bool(GOOGLE_PLACES_KEY))
-    status_card("Pixabay", bool(PIXABAY_API_KEY))
-    
-    # Thêm trạng thái ChromaDB
-    chroma_status = chroma_client is not None and chroma_travel_col is not None
-    status_card("ChromaDB RAG", chroma_status)
-    
-    # Thêm trạng thái Embedding Model
-    embedding_status = embedding_model is not None
-    status_card("Embedding Model", embedding_status)
-    
-    st.markdown("---")
-    # Nút seed dữ liệu thủ công
+    # if st.button("🔄 Nạp dữ liệu du lịch"):
+    #     try:
+    #         seed_vietnam_travel_from_csv("data/vietnam_travel_docs.csv")
+    #         st.success("✅ Đã nạp dữ liệu thành công!")
+    #     except Exception as e:
+    #         st.error(f"❌ Lỗi khi nạp dữ liệu: {e}")
+        # Nút seed dữ liệu thủ công
     if st.button("🔄 Seed dữ liệu du lịch", use_container_width=True):
         try:
             seed_vietnam_travel_from_csv("data/vietnam_travel_docs.csv")
-            st.success("✅ Đã seed dữ liệu thành công từ [data/vietnam_travel_docs.csv]!")
+            st.success("✅ Đã seed dữ liệu thành công!")
         except Exception as e:
             st.error(f"❌ Lỗi khi seed dữ liệu: {e}")
 
@@ -1201,10 +1163,23 @@ with st.sidebar:
     except Exception as e:
         st.sidebar.warning(f"⚠️ Chưa seed được dữ liệu: {e}")
     st.markdown("---")
-
-    st.caption("🍜 Food AI: CSV local dữ liệu + GPT fallback")
-    st.markdown("Version: v1.3 + Voice + RAG + Local Embedding")
+    def status_card(title, ok=True):
+        cls = "status-ok" if ok else "status-bad"
+        icon = "✅" if ok else "⚠️"
+        st.markdown(f"<div class='{cls}'>{icon} {title}</div>", unsafe_allow_html=True)
+    status_card("OpenWeatherMap", bool(OPENWEATHERMAP_API_KEY))
+    # status_card("Google Places", bool(GOOGLE_PLACES_KEY))
+    status_card("Pixabay", bool(PIXABAY_API_KEY))
     
+    # Thêm trạng thái ChromaDB
+    chroma_status = chroma_client is not None and chroma_travel_col is not None
+    status_card("ChromaDB RAG", chroma_status)
+    
+    st.markdown("---")
+    st.caption("🍜 Food AI: CSV local dữ liệu + GPT fallback")
+    st.markdown("Version: v1.3 + Voice + RAG")
+    
+
 
 # initialize session messages
 if "messages" not in st.session_state:
@@ -1359,6 +1334,7 @@ with main_tab:
                                 detected_intent = None
                                 intent_used = None
                         if not detected_intent:
+                            # SỬA LỖI: Đổi user_text thành user_input
                             docs, rag_context = rag_query_top_k(user_input, k=5)
                             sources_count = len(docs)
                             recent_mem = recall_recent_memories(user_input, k=3)
@@ -1629,3 +1605,7 @@ with analytics_tab:
 
 st.markdown("---")
 st.markdown("<div class='small-muted'>Tip: Bạn có thể yêu cầu cụ thể như 'Lịch trình 3 ngày ở Hội An', 'Đặc sản Sapa', hoặc 'Thời tiết Đà Nẵng 2025-10-20 đến 2025-10-22'.</div>", unsafe_allow_html=True)
+
+
+
+
