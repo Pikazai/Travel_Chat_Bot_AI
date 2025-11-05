@@ -50,7 +50,7 @@ def load_embedding_model():
         model_path = "data/all-MiniLM-L6-v2"
         if os.path.exists(model_path) and os.path.isdir(model_path):
             # Kiểm tra xem thư mục có chứa model không
-            if any(file.endswith('.bin') for file in os.listdir(model_path)):
+            if any(file.endswith('model.safetensors') for file in os.listdir(model_path)):
                 model = SentenceTransformer(model_path)
                 print("✅ Đã tải model embedding local: all-MiniLM-L6-v2")
                 return model
@@ -1146,43 +1146,28 @@ Câu người dùng: "{user_text}"
 # STREAMLIT UI LAYOUT
 # -------------------------
 render_hero_section()
-main_tab, analytics_tab = st.tabs(["💬 Chatbot Du lịch", "📊 Thống kê truy vấn"])
+main_tab, analytics_tab = st.tabs(["💬 Trò chuyện với [Mây lang thang]", "📊 Thống kê truy vấn"])
 
 with st.sidebar:
     st.markdown("<div class='logo-title'><img src='https://img.icons8.com/emoji/48/000000/cloud-emoji.png'/> <h2>Mây Lang Thang</h2></div>", unsafe_allow_html=True)
-    st.header("Cài đặt")
+    st.header("⚙️Cài đặt")
     info_options = st.multiselect("Hiển thị thông tin",
                                   ["Weather", "Food", "Map", "Photos", "Cost", "Events"],
                                   default=["Weather", "Map","Food", "Photos"])
     st.markdown("---")
-    # st.write("Chọn mức zoom bản đồ:")
-    # map_zoom = st.slider("Zoom (4 = xa, 15 = gần)", 4, 15, 8)
-    # st.markdown("---")
     st.subheader("🎙️ Voice")
     enable_voice = st.checkbox("Bật nhập liệu bằng giọng nói", value=True)
     # asr_lang = st.selectbox("Ngôn ngữ nhận dạng", ["vi-VN", "en-US"], index=0)
     tts_enable = st.checkbox("🔊 Đọc to phản hồi", value=False)
     # tts_lang = st.selectbox("Ngôn ngữ TTS", ["vi", "en"], index=0)
     st.caption("Yêu cầu: ffmpeg + internet cho gTTS.")
-    st.markdown("---")
-    
-    def status_card(title, ok=True):
-        cls = "status-ok" if ok else "status-bad"
-        icon = "✅" if ok else "⚠️"
-        st.markdown(f"<div class='{cls}'>{icon} {title}</div>", unsafe_allow_html=True)
-    status_card("OpenWeatherMap", bool(OPENWEATHERMAP_API_KEY))
-    # status_card("Google Places", bool(GOOGLE_PLACES_KEY))
-    status_card("Pixabay", bool(PIXABAY_API_KEY))
-    
-    # Thêm trạng thái ChromaDB
-    chroma_status = chroma_client is not None and chroma_travel_col is not None
-    status_card("ChromaDB RAG", chroma_status)
-    
-    # Thêm trạng thái Embedding Model
-    embedding_status = embedding_model is not None
-    status_card("Embedding Model", embedding_status)
-    
-    st.markdown("---")
+    # st.markdown("---")
+    # st.write("🗺️Chọn mức zoom bản đồ:")
+    st.subheader("🗺️ Chọn mức zoom bản đồ:")
+    map_zoom = st.slider("Zoom (4 = xa, 15 = gần)", 4, 15, 8)
+    # st.markdown("---")
+    # st.subheader("⚙️ Quản lý dữ liệu")
+    # st.markdown("---")
     # Nút seed dữ liệu thủ công
     if st.button("🔄 Seed dữ liệu du lịch", use_container_width=True):
         try:
@@ -1201,11 +1186,24 @@ with st.sidebar:
     except Exception as e:
         st.sidebar.warning(f"⚠️ Chưa seed được dữ liệu: {e}")
     st.markdown("---")
-
+    def status_card(title, ok=True):
+        cls = "status-ok" if ok else "status-bad"
+        icon = "✅" if ok else "⚠️"
+        st.markdown(f"<div class='{cls}'>{icon} {title}</div>", unsafe_allow_html=True)
+    status_card("OpenWeatherMap", bool(OPENWEATHERMAP_API_KEY))
+    # status_card("Google Places", bool(GOOGLE_PLACES_KEY))
+    status_card("Pixabay", bool(PIXABAY_API_KEY))
+    
+    # Thêm trạng thái ChromaDB
+    chroma_status = chroma_client is not None and chroma_travel_col is not None
+    status_card("ChromaDB RAG", chroma_status)
+    
+    # Thêm trạng thái Embedding Model
+    embedding_status = embedding_model is not None
+    status_card("Embedding Model", embedding_status)
     st.caption("🍜 Food AI: CSV local dữ liệu + GPT fallback")
     st.markdown("Version: v1.3 + Voice + RAG + Local Embedding")
-    
-
+    st.markdown("By [Mây Lang Thang](https://#) ❤️")
 # initialize session messages
 if "messages" not in st.session_state:
     st.session_state.messages = [{"role": "system", "content": system_prompt}]
