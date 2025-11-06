@@ -549,11 +549,10 @@ def get_weather_forecast(city_name, start_date=None, end_date=None, user_text=No
     if not OPENWEATHERMAP_API_KEY:
         return "⚠️ Thiếu OpenWeatherMap API Key."
     
-     # THÊM: Xử lý khi không có ngày - lấy ngày hiện tại
     if start_date is None or end_date is None:
         today = datetime.now().date()
         start_date = datetime.combine(today, datetime.min.time())
-        end_date = datetime.combine(today, datetime.min.time())
+        end_date = datetime.combine(today + timedelta(days=3), datetime.min.time())
     
     try:
         def _fetch_weather(city):
@@ -766,9 +765,7 @@ def extract_city_and_dates(user_text):
     try:
         prompt = f"""
 You are a multilingual travel information extractor.
-Extract 'city','start_date','end_date' (YYYY-MM-DD). 
-If only one date is provided, set both to that date.
-If no date is mentioned, set both start_date and end_date to null.
+Extract 'city','start_date','end_date' (YYYY-MM-DD). If only one date is provided, set both to that date.
 Return JSON only.
 Message: "{user_text}"
 """
@@ -787,32 +784,15 @@ Message: "{user_text}"
         city = data.get("city")
         s = data.get("start_date")
         e = data.get("end_date")
-        
-        # THÊM: Kiểm tra nếu ngày là null hoặc rỗng
         def _parse(d):
-            if not d or d.lower() == 'null' or d == '':
+            if not d:
                 return None
-            try:
-                dt = datetime.strptime(d, "%Y-%m-%d")
-                return dt
-            except ValueError:
-                return None
-                
+            dt = datetime.strptime(d, "%Y-%m-%d")
+            return dt
         start_dt = _parse(s)
         end_dt = _parse(e)
-        
-        # THÊM: Kiểm tra ngày hợp lệ
-        today = datetime.now().date()
-        if start_dt and start_dt.date() < today:
-            # Nếu ngày trong quá khứ, bỏ qua và coi như không có ngày
-            start_dt = None
-            
-        if end_dt and end_dt.date() < today:
-            end_dt = None
-            
         if start_dt and not end_dt:
             end_dt = start_dt
-            
         return city, start_dt, end_dt
     except Exception:
         return None, None, None
@@ -1178,9 +1158,9 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("🎙️ Voice")
     enable_voice = st.checkbox("Bật nhập liệu bằng giọng nói", value=True)
-    asr_lang = st.selectbox("Ngôn ngữ nhận dạng", ["vi-VN"], index=0)
+    # asr_lang = st.selectbox("Ngôn ngữ nhận dạng", ["vi-VN", "en-US"], index=0)
     tts_enable = st.checkbox("🔊 Đọc to phản hồi", value=False)
-    tts_lang = st.selectbox("Ngôn ngữ TTS", ["vi"], index=0)
+    # tts_lang = st.selectbox("Ngôn ngữ TTS", ["vi", "en"], index=0)
     st.caption("Yêu cầu: ffmpeg + internet cho gTTS.")
     # st.markdown("---")
     # st.write("🗺️Chọn mức zoom bản đồ:")
@@ -1322,18 +1302,6 @@ with main_tab:
             pass
 
         city_guess, start_date, end_date = extract_city_and_dates(user_input)
-
-        # SỬA: Xử lý khi không có ngày cụ thể - lấy ngày hiện tại
-        today = datetime.now().date()
-        if start_date is None:
-            start_date = datetime.combine(today, datetime.min.time())
-        if end_date is None:
-            end_date = datetime.combine(today, datetime.min.time())
-
-        # Đảm bảo end_date không nhỏ hơn start_date
-        if end_date < start_date:
-            end_date = start_date
-
         days = extract_days_from_text(user_input, start_date, end_date)
         
         # Reset các biến tracking
@@ -1342,8 +1310,7 @@ with main_tab:
         intent_used = None
         memory_used = False
 
-        # SỬA: Kiểm tra cả start_date và đảm bảo nó không phải là ngày hiện tại (tránh cảnh báo không cần thiết)
-        if start_date and start_date.date() != datetime.now().date():
+        if start_date:
             today = datetime.now().date()
             max_forecast_date = today + timedelta(days=5)
             if start_date.date() > max_forecast_date:

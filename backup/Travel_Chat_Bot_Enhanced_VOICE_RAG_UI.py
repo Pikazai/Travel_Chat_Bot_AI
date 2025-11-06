@@ -1,4 +1,4 @@
-# Travel_Chat_Bot_Enhanced_VOICE_RAG_fixed2.py
+# Travel_Chat_Bot_Enhanced_VOICE_RAG_UI.py
 # =================================
 # Mở rộng: RAG (ChromaDB) + long-term memory + intent quick-match + recommendations
 # Giữ lại toàn bộ chức năng gốc (voice, TTS, weather, map, foods, restaurants...)
@@ -21,6 +21,7 @@ import pydeck as pdk
 import re
 import time
 import plotly.express as px
+import random
 
 # === VOICE imports (mới) ===
 import io
@@ -41,7 +42,32 @@ import uuid
 from sentence_transformers import SentenceTransformer
 import numpy as np
 
-# === KHAI BÁO MODEL EMBEDDING LOCAL ===
+# === DANH SÁCH HÌNH ẢNH HERO ===
+HERO_IMAGES = [
+    "https://images.unsplash.com/photo-1528127269322-539801943592?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&q=80",  # Phong cảnh Việt Nam
+    "https://images.unsplash.com/photo-1558618047-3c8c76ca7d13?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&q=80",  # Hội An
+    "https://images.unsplash.com/photo-1583417319078-a9c5d5e34b10?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&q=80",  # Sapa
+    "https://images.unsplash.com/photo-1599643478518-a784e5dc4c8f?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&q=80",  # Hạ Long
+    "https://images.unsplash.com/photo-1552074280-82c79c8d9c40?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&q=80",  # Đà Nẵng
+]
+
+CITY_HERO_IMAGES = {
+    "hà nội": "https://images.unsplash.com/photo-1528127269322-539801943592?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&q=80",
+    "hội an": "https://images.unsplash.com/photo-1558618047-3c8c76ca7d13?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&q=80",
+    "sapa": "https://images.unsplash.com/photo-1583417319078-a9c5d5e34b10?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&q=80",
+    "hạ long": "https://images.unsplash.com/photo-1599643478518-a784e5dc4c8f?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&q=80",
+    "đà nẵng": "https://images.unsplash.com/photo-1552074280-82c79c8d9c40?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&q=80",
+    "huế": "https://images.unsplash.com/photo-1583422409514-3c0b1d20c7dc?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&q=80",
+    "nha trang": "https://images.unsplash.com/photo-1599643478518-a784e5dc4c8f?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&q=80",
+    "phú quốc": "https://images.unsplash.com/photo-1558618047-3c8c76ca7d13?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&q=80",
+}
+
+def get_hero_image(city=None):
+    """Lấy hình ảnh hero dựa trên thành phố hoặc ngẫu nhiên"""
+    if city and city.lower() in CITY_HERO_IMAGES:
+        return CITY_HERO_IMAGES[city.lower()]
+    return random.choice(HERO_IMAGES)
+
 # === KHAI BÁO MODEL EMBEDDING LOCAL ===
 @st.cache_resource
 def load_embedding_model():
@@ -174,6 +200,115 @@ st.markdown(
       .hero__title { font-size: 20px; }
     }
     .audio-wrapper {margin-top: 6px;}
+    
+    /* Modern Hero Section */
+    .modern-hero {
+        background: linear-gradient(135deg, var(--primary) 0%, #1e3c72 100%);
+        border-radius: 16px;
+        padding: 1.5rem 2rem;
+        margin: 0.5rem 0 1.5rem 0;
+        position: relative;
+        overflow: hidden;
+        box-shadow: 0 10px 25px rgba(37, 99, 235, 0.15);
+        color: white;
+        min-height: 140px;
+        display: flex;
+        align-items: center;
+        background-size: cover;
+        background-position: center;
+        transition: all 0.3s ease;
+    }
+
+    .modern-hero::before {
+        content: '';
+        position: absolute;
+        top: -30%;
+        right: -10%;
+        width: 200px;
+        height: 200px;
+        background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 70%);
+        border-radius: 50%;
+    }
+
+    .modern-hero:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 15px 35px rgba(37, 99, 235, 0.25);
+    }
+
+    .hero-content {
+        flex: 1;
+        z-index: 2;
+    }
+
+    .hero-content h1 {
+        font-size: 1.8rem;
+        font-weight: 800;
+        margin-bottom: 0.5rem;
+        background: linear-gradient(45deg, #fff, #e0f2fe);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        text-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+
+    .hero-subtitle {
+        font-size: 1rem;
+        margin-bottom: 0;
+        opacity: 0.95;
+        font-weight: 400;
+        text-shadow: 0 1px 2px rgba(0,0,0,0.1);
+    }
+
+    .hero-stats {
+        display: flex;
+        gap: 1.5rem;
+        margin-top: 1rem;
+    }
+
+    .stat {
+        text-align: center;
+        background: rgba(255,255,255,0.15);
+        backdrop-filter: blur(10px);
+        padding: 0.5rem 1rem;
+        border-radius: 12px;
+        border: 1px solid rgba(255,255,255,0.2);
+    }
+
+    .stat-number {
+        font-size: 1.2rem;
+        font-weight: 700;
+        margin-bottom: 0.1rem;
+        color: #fff;
+    }
+
+    .stat-label {
+        font-size: 0.75rem;
+        opacity: 0.9;
+        color: #e0f2fe;
+    }
+
+    .hero-visual {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 2;
+    }
+
+    @media (max-width: 768px) {
+        .modern-hero {
+            padding: 1rem 1.5rem;
+            min-height: 120px;
+        }
+        .hero-content h1 {
+            font-size: 1.5rem;
+        }
+        .hero-stats {
+            gap: 1rem;
+        }
+        .stat {
+            padding: 0.4rem 0.8rem;
+        }
+    }
     </style>
     """, unsafe_allow_html=True
 )
@@ -205,6 +340,39 @@ system_prompt = """
 Bạn là Hướng dẫn viên du lịch ảo Alex - người kể chuyện, am hiểu văn hóa, lịch sử, ẩm thực và thời tiết Việt Nam.
 Luôn đưa ra thông tin hữu ích, gợi ý lịch trình, món ăn, chi phí, thời gian lý tưởng, sự kiện và góc chụp ảnh.
 """
+
+# -------------------------
+# COMPACT HERO SECTION
+# -------------------------
+def render_compact_hero(city=None):
+    """Hero Section compact với hình ảnh nền đẹp"""
+    hero_image = get_hero_image(city)
+    
+    st.markdown(f"""
+    <div class="modern-hero" style="background: linear-gradient(rgba(43, 76, 126, 0.85), rgba(43, 76, 126, 0.9)), url('{hero_image}'); background-size: cover; background-position: center;">
+        <div class="hero-content">
+            <h1>🌤️ Mây Lang Thang</h1>
+            <p class="hero-subtitle">Trợ lý du lịch AI - Khám phá Việt Nam thông minh</p>
+            <div class="hero-stats">
+                <div class="stat">
+                    <div class="stat-number">500+</div>
+                    <div class="stat-label">Điểm đến</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-number">AI</div>
+                    <div class="stat-label">Thông minh</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-number">24/7</div>
+                    <div class="stat-label">Hỗ trợ</div>
+                </div>
+            </div>
+        </div>
+        <div class="hero-visual">
+            <div style="font-size: 48px;">🏞️</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
 # -------------------------
 # DB LOGGING (SQLite) - ĐÃ SỬA SCHEMA
@@ -549,11 +717,10 @@ def get_weather_forecast(city_name, start_date=None, end_date=None, user_text=No
     if not OPENWEATHERMAP_API_KEY:
         return "⚠️ Thiếu OpenWeatherMap API Key."
     
-     # THÊM: Xử lý khi không có ngày - lấy ngày hiện tại
     if start_date is None or end_date is None:
         today = datetime.now().date()
         start_date = datetime.combine(today, datetime.min.time())
-        end_date = datetime.combine(today, datetime.min.time())
+        end_date = datetime.combine(today + timedelta(days=3), datetime.min.time())
     
     try:
         def _fetch_weather(city):
@@ -766,16 +933,14 @@ def extract_city_and_dates(user_text):
     try:
         prompt = f"""
 You are a multilingual travel information extractor.
-Extract 'city','start_date','end_date' (YYYY-MM-DD). 
-If only one date is provided, set both to that date.
-If no date is mentioned, set both start_date and end_date to null.
+Extract 'city','start_date','end_date' (YYYY-MM-DD). If only one date is provided, set both to that date.
 Return JSON only.
 Message: "{user_text}"
 """
         response = client.chat.completions.create(
             model=DEPLOYMENT_NAME,
             messages=[{"role":"system","content":prompt}],
-            max_tokens=300,
+            max_tokens=200,
             temperature=0
         )
         content = response.choices[0].message.content.strip()
@@ -787,32 +952,15 @@ Message: "{user_text}"
         city = data.get("city")
         s = data.get("start_date")
         e = data.get("end_date")
-        
-        # THÊM: Kiểm tra nếu ngày là null hoặc rỗng
         def _parse(d):
-            if not d or d.lower() == 'null' or d == '':
+            if not d:
                 return None
-            try:
-                dt = datetime.strptime(d, "%Y-%m-%d")
-                return dt
-            except ValueError:
-                return None
-                
+            dt = datetime.strptime(d, "%Y-%m-%d")
+            return dt
         start_dt = _parse(s)
         end_dt = _parse(e)
-        
-        # THÊM: Kiểm tra ngày hợp lệ
-        today = datetime.now().date()
-        if start_dt and start_dt.date() < today:
-            # Nếu ngày trong quá khứ, bỏ qua và coi như không có ngày
-            start_dt = None
-            
-        if end_dt and end_dt.date() < today:
-            end_dt = None
-            
         if start_dt and not end_dt:
             end_dt = start_dt
-            
         return city, start_dt, end_dt
     except Exception:
         return None, None, None
@@ -1048,32 +1196,6 @@ except Exception:
     pass
 
 # -------------------------
-# HERO / HEADER SECTION
-# -------------------------
-def render_hero_section(default_city_hint="Hội An, Đà Nẵng, Hà Nội..."):
-    with st.form(key='hero_search_form', clear_on_submit=False):
-        cols = st.columns([3,2,1,1])
-        dest = cols[0].text_input("Điểm đến", placeholder=default_city_hint)
-        dates = cols[1].date_input("Ngày (bắt đầu / kết thúc)", [])
-        people = cols[2].selectbox("Người", [1,2,3,4,5,6], index=0)
-        style = cols[3].selectbox("Mức chi", ["trung bình", "tiết kiệm", "cao cấp"], index=0)
-        submitted = st.form_submit_button("Gợi ý nhanh", use_container_width=True)
-        if submitted:
-            if len(dates) == 2:
-                s = dates[0].strftime("%Y-%m-%d")
-                e = dates[1].strftime("%Y-%m-%d")
-                q = f"Lịch trình { ( (dates[1]-dates[0]).days +1 ) } ngày ở {dest} từ {s} đến {e}"
-            elif len(dates) == 1:
-                s = dates[0].strftime("%Y-%m-%d")
-                q = f"Lịch trình 1 ngày ở {dest} vào {s}"
-            else:
-                q = f"Lịch trình 3 ngày ở {dest}"
-            q += f" • người: {people} • mức: {style}"
-            st.session_state.user_input = q
-            st.rerun()
-    # # THÊM DÒNG NÀY SAU st.rerun() để clear form:
-    # st.session_state.hero_search_form = False
-# -------------------------
 # VOICE HELPERS
 # -------------------------
 def detect_audio_type_header(b):
@@ -1162,12 +1284,46 @@ Câu người dùng: "{user_text}"
     except Exception as e:
         print(f"[WARN] Lỗi phân loại chủ đề: {e}")
     return True  # fallback
-
+def render_hero_section(default_city_hint="Hội An, Đà Nẵng, Hà Nội..."):
+    with st.form(key='hero_search_form', clear_on_submit=False):
+        cols = st.columns([3,2,1,1])
+        dest = cols[0].text_input("Điểm đến", placeholder=default_city_hint)
+        dates = cols[1].date_input("Ngày (bắt đầu / kết thúc)", [])
+        people = cols[2].selectbox("Người", [1,2,3,4,5,6], index=0)
+        style = cols[3].selectbox("Mức chi", ["trung bình", "tiết kiệm", "cao cấp"], index=0)
+        submitted = st.form_submit_button("Gợi ý nhanh", use_container_width=True)
+        if submitted:
+            if len(dates) == 2:
+                s = dates[0].strftime("%Y-%m-%d")
+                e = dates[1].strftime("%Y-%m-%d")
+                q = f"Lịch trình { ( (dates[1]-dates[0]).days +1 ) } ngày ở {dest} từ {s} đến {e}"
+            elif len(dates) == 1:
+                s = dates[0].strftime("%Y-%m-%d")
+                q = f"Lịch trình 1 ngày ở {dest} vào {s}"
+            else:
+                q = f"Lịch trình 3 ngày ở {dest}"
+            q += f" • người: {people} • mức: {style}"
+            st.session_state.user_input = q
+            st.rerun()
+render_hero_section()
 # -------------------------
 # STREAMLIT UI LAYOUT
 # -------------------------
-render_hero_section()
 main_tab, analytics_tab = st.tabs(["💬 Trò chuyện với [Mây lang thang]", "📊 Thống kê truy vấn"])
+
+# Lấy thành phố từ session state nếu có
+current_city = None
+if "messages" in st.session_state and len(st.session_state.messages) > 1:
+    # Tìm thành phố từ tin nhắn gần nhất
+    for msg in reversed(st.session_state.messages):
+        if msg["role"] == "user":
+            city_guess, _, _ = extract_city_and_dates(msg["content"])
+            if city_guess:
+                current_city = city_guess
+                break
+
+# Render Compact Hero với hình ảnh theo thành phố
+render_compact_hero(current_city)
 
 with st.sidebar:
     st.markdown("<div class='logo-title'><img src='https://img.icons8.com/emoji/48/000000/cloud-emoji.png'/> <h2>Mây Lang Thang</h2></div>", unsafe_allow_html=True)
@@ -1178,17 +1334,13 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("🎙️ Voice")
     enable_voice = st.checkbox("Bật nhập liệu bằng giọng nói", value=True)
-    asr_lang = st.selectbox("Ngôn ngữ nhận dạng", ["vi-VN"], index=0)
+    asr_lang = st.selectbox("Ngôn ngữ nhận dạng", ["vi-VN", "en-US"], index=0)
     tts_enable = st.checkbox("🔊 Đọc to phản hồi", value=False)
-    tts_lang = st.selectbox("Ngôn ngữ TTS", ["vi"], index=0)
+    tts_lang = st.selectbox("Ngôn ngữ TTS", ["vi", "en"], index=0)
     st.caption("Yêu cầu: ffmpeg + internet cho gTTS.")
-    # st.markdown("---")
-    # st.write("🗺️Chọn mức zoom bản đồ:")
     st.subheader("🗺️ Chọn mức zoom bản đồ:")
     map_zoom = st.slider("Zoom (4 = xa, 15 = gần)", 4, 15, 8)
-    # st.markdown("---")
-    # st.subheader("⚙️ Quản lý dữ liệu")
-    # st.markdown("---")
+    
     # Nút seed dữ liệu thủ công
     if st.button("🔄 Seed dữ liệu du lịch", use_container_width=True):
         try:
@@ -1212,7 +1364,6 @@ with st.sidebar:
         icon = "✅" if ok else "⚠️"
         st.markdown(f"<div class='{cls}'>{icon} {title}</div>", unsafe_allow_html=True)
     status_card("OpenWeatherMap", bool(OPENWEATHERMAP_API_KEY))
-    # status_card("Google Places", bool(GOOGLE_PLACES_KEY))
     status_card("Pixabay", bool(PIXABAY_API_KEY))
     
     # Thêm trạng thái ChromaDB
@@ -1225,6 +1376,7 @@ with st.sidebar:
     st.caption("🍜 Food AI: CSV local dữ liệu + GPT fallback")
     st.markdown("Version: v1.3 + Voice + RAG + Local Embedding")
     st.markdown("By [Mây Lang Thang](https://#) ❤️")
+    
 # initialize session messages
 if "messages" not in st.session_state:
     st.session_state.messages = [{"role": "system", "content": system_prompt}]
@@ -1292,11 +1444,8 @@ with main_tab:
 
     # Chat input (gõ phím)
     user_input = st.chat_input("Mời bạn đặt câu hỏi:")
-    # Xóa state sau khi đã sử dụng để tránh lặp lại
     if "user_input" in st.session_state and st.session_state.user_input:
         user_input = st.session_state.user_input
-        # QUAN TRỌNG: Xóa state ngay sau khi sử dụng
-        del st.session_state.user_input
 
     if user_input:
         with st.chat_message("user", avatar="🧭"):
@@ -1322,18 +1471,6 @@ with main_tab:
             pass
 
         city_guess, start_date, end_date = extract_city_and_dates(user_input)
-
-        # SỬA: Xử lý khi không có ngày cụ thể - lấy ngày hiện tại
-        today = datetime.now().date()
-        if start_date is None:
-            start_date = datetime.combine(today, datetime.min.time())
-        if end_date is None:
-            end_date = datetime.combine(today, datetime.min.time())
-
-        # Đảm bảo end_date không nhỏ hơn start_date
-        if end_date < start_date:
-            end_date = start_date
-
         days = extract_days_from_text(user_input, start_date, end_date)
         
         # Reset các biến tracking
@@ -1342,8 +1479,7 @@ with main_tab:
         intent_used = None
         memory_used = False
 
-        # SỬA: Kiểm tra cả start_date và đảm bảo nó không phải là ngày hiện tại (tránh cảnh báo không cần thiết)
-        if start_date and start_date.date() != datetime.now().date():
+        if start_date:
             today = datetime.now().date()
             max_forecast_date = today + timedelta(days=5)
             if start_date.date() > max_forecast_date:

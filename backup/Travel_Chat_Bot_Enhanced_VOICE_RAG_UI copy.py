@@ -1,12 +1,8 @@
-# Travel_Chat_Bot_Enhanced_VOICE_RAG_fixed2.py
+# Travel_Chat_Bot_Enhanced_VOICE_RAG_Modern.py
 # =================================
 # Mở rộng: RAG (ChromaDB) + long-term memory + intent quick-match + recommendations
 # Giữ lại toàn bộ chức năng gốc (voice, TTS, weather, map, foods, restaurants...)
-#
-# Yêu cầu:
-#   pip install streamlit-mic-recorder SpeechRecognition pydub gTTS chromadb openai geopy pandas pydeck plotly sentence-transformers
-#   Cài ffmpeg cho pydub
-#
+# MODERN UI VERSION - Enhanced Professional Interface
 
 import streamlit as st
 import openai
@@ -22,19 +18,18 @@ import re
 import time
 import plotly.express as px
 
-# === VOICE imports (mới) ===
+# === VOICE imports ===
 import io
 import base64
 import tempfile
 import subprocess
 from streamlit_mic_recorder import mic_recorder
 import speech_recognition as sr
-from pydub import AudioSegment   # yêu cầu ffmpeg
+from pydub import AudioSegment
 from gtts import gTTS
 
 # === RAG / Chroma imports ===
 from chromadb import PersistentClient
-# NOTE: Replaced Client->PersistentClient for Chroma v1.2+# Chroma v1.2+ no longer uses chromadb.config.Settings
 import uuid
 
 # === THÊM IMPORTS CHO EMBEDDING LOCAL ===
@@ -42,24 +37,19 @@ from sentence_transformers import SentenceTransformer
 import numpy as np
 
 # === KHAI BÁO MODEL EMBEDDING LOCAL ===
-# === KHAI BÁO MODEL EMBEDDING LOCAL ===
 @st.cache_resource
 def load_embedding_model():
     try:
-        # Thử tải từ thư mục local trước, nếu không có thì tải từ Hugging Face
         model_path = "data/all-MiniLM-L6-v2"
         if os.path.exists(model_path) and os.path.isdir(model_path):
-            # Kiểm tra xem thư mục có chứa model không
             if any(file.endswith('model.safetensors') for file in os.listdir(model_path)):
                 model = SentenceTransformer(model_path)
                 print("✅ Đã tải model embedding local: all-MiniLM-L6-v2")
                 return model
         
-        # Nếu không có model local, tải từ Hugging Face
         print("📥 Đang tải model từ Hugging Face...")
         model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
         
-        # Lưu model vào thư mục local để lần sau dùng
         os.makedirs(model_path, exist_ok=True)
         model.save(model_path)
         print(f"✅ Đã tải và lưu model vào: {model_path}")
@@ -71,111 +61,374 @@ def load_embedding_model():
 # Load model
 embedding_model = load_embedding_model()
 
-# === Ensure single persistent Chroma client in Streamlit session ===
+# === Chroma persistent directory ===
 CHROMA_PERSIST_DIR = os.getenv("CHROMA_PERSIST_DIR", "chromadb_data")
-# We'll create chroma_client lazily in init_chroma(), but ensure session key exists placeholder
-# Actual ChromaClient will be created inside init_chroma using this CHROMA_PERSIST_DIR.
 
 # -------------------------
-st.set_page_config(page_title="[Mây Lang Thang] - Travel Assistant (Voice + RAG)", layout="wide", page_icon="🌤️")
+st.set_page_config(
+    page_title="🌤️ Mây Lang Thang - AI Travel Assistant", 
+    layout="wide", 
+    page_icon="🌤️",
+    initial_sidebar_state="expanded"
+)
 
-# Global CSS + UI tweaks
+# ========================
+# MODERN CSS STYLING
+# ========================
 st.markdown(
     """
     <style>
-    :root{
-      --primary:#2b4c7e;
-      --accent:#e7f3ff;
-      --muted:#f2f6fa;
+    :root {
+        --primary: #2563eb;
+        --primary-dark: #1d4ed8;
+        --secondary: #8b5cf6;
+        --accent: #06b6d4;
+        --success: #10b981;
+        --warning: #f59e0b;
+        --error: #ef4444;
+        --background: #f8fafc;
+        --surface: #ffffff;
+        --text: #1e293b;
+        --text-muted: #64748b;
     }
+
+    * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+    }
+
     body {
-      background: linear-gradient(90deg, #f8fbff 0%, #eef5fa 100%);
-      font-family: 'Segoe UI', Roboto, Arial, sans-serif;
+        background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 50%, #f0fdf4 100%);
+        font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+        line-height: 1.6;
     }
-    .stApp > header {visibility: hidden;}
-    h1, h2, h3 { color: var(--primary); }
-    .sidebar-card { background-color:#f1f9ff; padding:10px; border-radius:10px; margin-bottom:8px;}
-    .user-message { background: #f2f2f2; padding:10px; border-radius:12px; }
-    .assistant-message { background: #e7f3ff; padding:10px; border-radius:12px; }
-    .pill-btn { border-radius:999px !important; background:#e3f2fd !important; color:var(--primary) !important; padding:6px 12px; border: none; }
-    .status-ok { background:#d4edda; padding:8px; border-radius:8px; }
-    .status-bad { background:#f8d7da; padding:8px; border-radius:8px; }
-    .small-muted { color: #6b7280; font-size:12px; }
-    .logo-title { display:flex; align-items:center; gap:10px; }
-    .logo-title h1 { margin:0; }
-    .assistant-bubble {
-      background-color: #e7f3ff;
-      padding: 12px 16px;
-      border-radius: 15px;
-      margin-bottom: 6px;
+
+    /* Ẩn header mặc định của Streamlit */
+    .stApp > header { display: none; }
+    #MainMenu { visibility: hidden; }
+    footer { visibility: hidden; }
+
+    /* Main container improvements */
+    .main .block-container {
+        padding-top: 1rem;
+        max-width: 1400px;
     }
+
+    /* Compact Hero Section */
+    .modern-hero {
+        background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
+        border-radius: 16px;
+        padding: 1.5rem 2rem;
+        margin: 0.5rem 0 1.5rem 0;
+        position: relative;
+        overflow: hidden;
+        box-shadow: 0 10px 25px rgba(37, 99, 235, 0.15);
+        color: white;
+        min-height: 120px;
+        display: flex;
+        align-items: center;
+    }
+
+    .modern-hero::before {
+        content: '';
+        position: absolute;
+        top: -30%;
+        right: -10%;
+        width: 200px;
+        height: 200px;
+        background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 70%);
+        border-radius: 50%;
+    }
+
+    .hero-content {
+        flex: 1;
+    }
+
+    .hero-content h1 {
+        font-size: 1.8rem;
+        font-weight: 800;
+        margin-bottom: 0.5rem;
+        background: linear-gradient(45deg, #fff, #e0f2fe);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+    }
+
+    .hero-subtitle {
+        font-size: 1rem;
+        margin-bottom: 0;
+        opacity: 0.9;
+        font-weight: 400;
+    }
+
+    .hero-stats {
+        display: flex;
+        gap: 1.5rem;
+        margin-top: 1rem;
+    }
+
+    .stat {
+        text-align: center;
+    }
+
+    .stat-number {
+        font-size: 1.2rem;
+        font-weight: 700;
+        margin-bottom: 0.1rem;
+    }
+
+    .stat-label {
+        font-size: 0.75rem;
+        opacity: 0.8;
+    }
+
+    .hero-visual {
+        display: none; /* Ẩn visual để tiết kiệm không gian */
+    }
+
+    /* Modern Cards */
+    .surface-card {
+        background: var(--surface);
+        border-radius: 12px;
+        padding: 1.25rem;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        backdrop-filter: blur(10px);
+        margin-bottom: 1rem;
+    }
+
+    /* Enhanced Chat Messages */
     .user-message {
-      background-color: #f2f2f2;
-      padding: 12px 16px;
-      border-radius: 15px;
-      margin-bottom: 6px;
+        background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+        color: white;
+        padding: 1rem 1.25rem;
+        border-radius: 18px 18px 4px 18px;
+        margin: 0.5rem 0;
+        max-width: 80%;
+        margin-left: auto;
+        box-shadow: 0 4px 12px rgba(37, 99, 235, 0.2);
+        border: 1px solid rgba(255, 255, 255, 0.1);
     }
+
+    .assistant-message {
+        background: var(--surface);
+        padding: 1rem 1.25rem;
+        border-radius: 18px 18px 18px 4px;
+        margin: 0.5rem 0;
+        max-width: 80%;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+        border: 1px solid rgba(0, 0, 0, 0.05);
+    }
+
+    /* Modern Sidebar */
+    [data-testid="stSidebar"] {
+        background: linear-gradient(180deg, var(--surface) 0%, #f8fafc 100%);
+        border-right: 1px solid rgba(0, 0, 0, 0.05);
+    }
+
+    .sidebar-card {
+        background: var(--surface);
+        border-radius: 10px;
+        padding: 1rem;
+        margin-bottom: 1rem;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
+        border: 1px solid rgba(0, 0, 0, 0.05);
+    }
+
+    .sidebar-header {
+        padding: 1rem 0;
+        border-bottom: 1px solid rgba(0,0,0,0.1);
+        margin-bottom: 1rem;
+    }
+
+    .logo-title {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .logo {
+        font-size: 2rem;
+    }
+
+    .sidebar-subtitle {
+        color: var(--text-muted);
+        font-size: 0.8rem;
+        margin-top: -0.3rem;
+    }
+
+    /* Quick Actions - Giữ nguyên kiểu cũ nhưng chỉnh CSS */
+    .quick-actions {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 0.5rem;
+        margin: 1rem 0;
+    }
+    
+    .quick-action-btn {
+        background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
+        color: white;
+        border: none;
+        border-radius: 10px;
+        padding: 0.75rem 0.5rem;
+        text-align: center;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        font-weight: 600;
+        font-size: 0.85rem;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        min-height: 60px;
+    }
+
+    .quick-action-btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 15px rgba(37, 99, 235, 0.3);
+    }
+
+    .quick-action-btn .emoji {
+        font-size: 1.2rem;
+        margin-bottom: 0.3rem;
+    }
+
+    .quick-action-btn .text {
+        font-size: 0.75rem;
+        line-height: 1.2;
+    }
+
+    /* Modern Tabs */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 0.5rem;
+        background: var(--surface);
+        padding: 0.5rem;
+        border-radius: 10px;
+        margin-bottom: 1rem;
+    }
+
+    .stTabs [data-baseweb="tab"] {
+        background: transparent !important;
+        border-radius: 8px !important;
+        padding: 0.5rem 1rem !important;
+        transition: all 0.2s ease;
+    }
+
+    .stTabs [aria-selected="true"] {
+        background: var(--primary) !important;
+        color: white !important;
+    }
+
+    /* Enhanced Status Cards */
+    .status-card {
+        background: var(--surface);
+        padding: 0.8rem;
+        border-radius: 10px;
+        margin-bottom: 0.5rem;
+        border-left: 4px solid var(--success);
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
+    }
+
+    .status-card.warning {
+        border-left-color: var(--warning);
+    }
+
+    .status-card.error {
+        border-left-color: var(--error);
+    }
+
+    /* Source badges */
     .source-badge {
-      background: #e8f5e8;
-      border: 1px solid #4caf50;
-      border-radius: 12px;
-      padding: 8px 12px;
-      margin: 5px 0;
-      font-size: 0.85em;
+        background: #e8f5e8;
+        border: 1px solid #4caf50;
+        border-radius: 10px;
+        padding: 6px 10px;
+        margin: 5px 0;
+        font-size: 0.8em;
     }
     .source-chroma {
-      background: #e3f2fd;
-      border-left: 4px solid #2196f3;
+        background: #e3f2fd;
+        border-left: 4px solid #2196f3;
     }
     .source-intent {
-      background: #fff3e0;
-      border-left: 4px solid #ff9800;
+        background: #fff3e0;
+        border-left: 4px solid #ff9800;
     }
     .source-memory {
-      background: #f3e5f5;
-      border-left: 4px solid #9c27b0;
+        background: #f3e5f5;
+        border-left: 4px solid #9c27b0;
     }
-    /* HERO */
-    .hero {
-      position: relative;
-      border-radius: 16px;
-      overflow: hidden;
-      box-shadow: 0 8px 30px rgba(43,76,126,0.12);
-      margin-bottom: 18px;
+
+    /* Loading Animation */
+    .stSpinner > div {
+        border: 2px solid var(--primary);
+        border-radius: 50%;
+        border-top: 2px solid transparent;
+        width: 20px;
+        height: 20px;
+        animation: spin 1s linear infinite;
     }
-    .hero__bg {
-      width: 100%;
-      height: 320px;
-      object-fit: cover;
-      filter: brightness(0.65) saturate(1.05);
+
+    @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
     }
-    .hero__overlay {
-      position: absolute;
-      top: 0; left: 0; right: 0; bottom: 0;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 24px;
-    }
-    .hero__card {
-      background: linear-gradient(90deg, rgba(255,255,255,0.02), rgba(255,255,255,0.08));
-      backdrop-filter: blur(6px);
-      border-radius: 12px;
-      padding: 18px;
-      width: 100%;
-      max-width: 980px;
-      color: white;
-    }
-    .hero__title { font-size: 28px; font-weight:700; margin:0 0 6px 0; color: #fff; }
-    .hero__subtitle { margin:0 0 12px 0; color: #f0f6ff; }
-    .hero__cta { display:flex; gap:8px; align-items:center; }
+
+    /* Responsive Design */
     @media (max-width: 768px) {
-      .hero__bg { height: 220px; }
-      .hero__title { font-size: 20px; }
+        .modern-hero {
+            padding: 1rem;
+            text-align: center;
+        }
+        
+        .hero-content h1 {
+            font-size: 1.5rem;
+        }
+        
+        .hero-stats {
+            justify-content: center;
+            gap: 1rem;
+        }
+        
+        .user-message,
+        .assistant-message {
+            max-width: 90%;
+        }
+        
+        .quick-actions {
+            grid-template-columns: repeat(2, 1fr);
+        }
     }
-    .audio-wrapper {margin-top: 6px;}
+
+    /* Custom Scrollbar */
+    ::-webkit-scrollbar {
+        width: 6px;
+    }
+
+    ::-webkit-scrollbar-track {
+        background: #f1f5f9;
+    }
+
+    ::-webkit-scrollbar-thumb {
+        background: var(--primary);
+        border-radius: 3px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+        background: var(--primary-dark);
+    }
+
+    /* Audio wrapper */
+    .audio-wrapper {
+        margin-top: 0.5rem;
+        border-radius: 10px;
+        overflow: hidden;
+    }
     </style>
-    """, unsafe_allow_html=True
+    """, 
+    unsafe_allow_html=True
 )
 
 # -------------------------
@@ -185,29 +438,124 @@ try:
     OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
 except Exception:
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", None)
+    
 OPENAI_ENDPOINT = st.secrets.get("OPENAI_ENDPOINT", "https://api.openai.com/v1") if hasattr(st, 'secrets') else os.getenv("OPENAI_ENDPOINT", "https://api.openai.com/v1")
 DEPLOYMENT_NAME = st.secrets.get("DEPLOYMENT_NAME", "gpt-4o-mini") if hasattr(st, 'secrets') else os.getenv("DEPLOYMENT_NAME", "gpt-4o-mini")
 OPENWEATHERMAP_API_KEY = st.secrets.get("OPENWEATHERMAP_API_KEY", "") if hasattr(st, 'secrets') else os.getenv("OPENWEATHERMAP_API_KEY", "")
 GOOGLE_PLACES_KEY = st.secrets.get("PLACES_API_KEY", "") if hasattr(st, 'secrets') else os.getenv("PLACES_API_KEY", "")
 PIXABAY_API_KEY = st.secrets.get("PIXABAY_API_KEY", "") if hasattr(st, 'secrets') else os.getenv("PIXABAY_API_KEY", "")
 
-# Chroma persistent dir (tùy chọn)
-CHROMA_PERSIST_DIR = os.getenv("CHROMA_PERSIST_DIR", "chromadb_data")
-
-# Initialize OpenAI client (using openai Python SDK modern interface)
+# Initialize OpenAI client
 if OPENAI_API_KEY:
     client = openai.OpenAI(base_url=OPENAI_ENDPOINT, api_key=OPENAI_API_KEY)
 else:
     client = None
 
-ChatBotName = "[Mây Lang Thang]"  # display name
+ChatBotName = "🌤️ Mây Lang Thang"
 system_prompt = """
 Bạn là Hướng dẫn viên du lịch ảo Alex - người kể chuyện, am hiểu văn hóa, lịch sử, ẩm thực và thời tiết Việt Nam.
 Luôn đưa ra thông tin hữu ích, gợi ý lịch trình, món ăn, chi phí, thời gian lý tưởng, sự kiện và góc chụp ảnh.
 """
 
 # -------------------------
-# DB LOGGING (SQLite) - ĐÃ SỬA SCHEMA
+# COMPACT HERO SECTION
+# -------------------------
+def render_compact_hero():
+    st.markdown("""
+    <div class="modern-hero">
+        <div class="hero-content">
+            <h1>🌤️ Mây Lang Thang</h1>
+            <p class="hero-subtitle">Trợ lý du lịch AI - Khám phá Việt Nam thông minh</p>
+            <div class="hero-stats">
+                <div class="stat">
+                    <div class="stat-number">500+</div>
+                    <div class="stat-label">Điểm đến</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-number">AI</div>
+                    <div class="stat-label">Thông minh</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-number">24/7</div>
+                    <div class="stat-label">Hỗ trợ</div>
+                </div>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+# -------------------------
+# QUICK ACTIONS - GIỮ NGUYÊN NHƯ CŨ
+# -------------------------
+def render_quick_actions():
+    st.markdown("### 🚀 Hành động nhanh")
+    
+    # Sử dụng HTML/CSS để tạo layout grid cho quick actions
+    st.markdown("""
+    <div class="quick-actions">
+        <button class="quick-action-btn" onclick="setQuickAction('weather')">
+            <div class="emoji">🌤️</div>
+            <div class="text">Thời tiết</div>
+        </button>
+        <button class="quick-action-btn" onclick="setQuickAction('food')">
+            <div class="emoji">🍜</div>
+            <div class="text">Đặc sản</div>
+        </button>
+        <button class="quick-action-btn" onclick="setQuickAction('map')">
+            <div class="emoji">🗺️</div>
+            <div class="text">Bản đồ</div>
+        </button>
+        <button class="quick-action-btn" onclick="setQuickAction('suggest')">
+            <div class="emoji">💡</div>
+            <div class="text">Gợi ý</div>
+        </button>
+    </div>
+    
+    <script>
+    function setQuickAction(action) {
+        const actions = {
+            'weather': 'Thời tiết hiện tại ở đây',
+            'food': 'Đặc sản địa phương', 
+            'map': 'Hiển thị bản đồ',
+            'suggest': 'Gợi ý lịch trình'
+        };
+        if (actions[action]) {
+            // This would need to be handled via Streamlit's JavaScript integration
+            // For now, we'll use a workaround with session state
+            window.parent.postMessage({
+                type: 'streamlit:setComponentValue',
+                value: actions[action]
+            }, '*');
+        }
+    }
+    </script>
+    """, unsafe_allow_html=True)
+    
+    # Tạo các nút Streamlit thông thường như cũ
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        if st.button("🌤️\nThời tiết", use_container_width=True, help="Xem thời tiết hiện tại"):
+            st.session_state.user_input = "Thời tiết hiện tại ở đây"
+            st.rerun()
+    
+    with col2:
+        if st.button("🍜\nĐặc sản", use_container_width=True, help="Xem đặc sản địa phương"):
+            st.session_state.user_input = "Đặc sản địa phương"
+            st.rerun()
+    
+    with col3:
+        if st.button("🗺️\nBản đồ", use_container_width=True, help="Xem bản đồ du lịch"):
+            st.session_state.user_input = "Hiển thị bản đồ"
+            st.rerun()
+    
+    with col4:
+        if st.button("💡\nGợi ý", use_container_width=True, help="Nhận gợi ý lịch trình"):
+            st.session_state.user_input = "Gợi ý lịch trình"
+            st.rerun()
+
+# -------------------------
+# DB LOGGING (SQLite)
 # -------------------------
 DB_PATH = "travel_chatbot_logs.db"
 
@@ -246,52 +594,15 @@ def log_interaction(user_input, city=None, start_date=None, end_date=None, inten
     conn.close()
 
 # -------------------------
-# Optional: seeding vietnam_travel collection from CSV
-# -------------------------
-def seed_vietnam_travel_from_csv(path="data/vietnam_travel_docs.csv"):
-    if chroma_travel_col is None:
-        print("Chroma travel collection not ready")
-        return False
-    if not os.path.exists(path):
-        print("Seed file not found:", path)
-        return False
-    try:
-        docs = []
-        metas = []
-        ids = []
-        import csv
-        with open(path, newline='', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                text = row.get("text") or row.get("description") or ""
-                docs.append(text)
-                metas.append({"title": row.get("title",""), "city": row.get("city",""), "source": row.get("source","")})
-                ids.append(row.get("id") or f"doc_{uuid.uuid4().hex[:8]}")
-        chroma_travel_col.add(documents=docs, metadatas=metas, ids=ids)
-        print(f"Seeded {len(docs)} docs to vietnam_travel")
-        return True
-    except Exception as e:
-        print("Seed error:", e)
-        return False
-
-# -------------------------
 # EMBEDDING LOCAL FUNCTION
 # -------------------------
 def get_embedding_local(text):
-    """
-    Trả về embedding sử dụng model local all-MiniLM-L6-v2 (384 dimensions)
-    """
     if embedding_model is None:
         return None
     try:
-        # Chuẩn hóa text
         if not text or not isinstance(text, str):
             return None
-        
-        # Encode text thành embedding
         embedding = embedding_model.encode(text)
-        
-        # Convert numpy array to list
         if hasattr(embedding, 'tolist'):
             return embedding.tolist()
         return list(embedding)
@@ -300,21 +611,14 @@ def get_embedding_local(text):
         return None
 
 # -------------------------
-# CHROMA (RAG + Memory + Intent) INIT
+# CHROMA INITIALIZATION
 # -------------------------
-
 def safe_get_collection(client, name, expected_dim=384):
-    """
-    Create or get a Chroma collection safely.
-    Auto recreate collection if dimension mismatch or corruption occurs.
-    Compatible with Chroma v1.2+ PersistentClient.
-    """
     try:
         col = None
         try:
             col = client.get_collection(name)
         except Exception:
-            # if get_collection not available, try get_or_create_collection
             try:
                 col = client.get_or_create_collection(name=name)
             except Exception:
@@ -323,16 +627,13 @@ def safe_get_collection(client, name, expected_dim=384):
             try:
                 col = client.create_collection(name=name)
             except Exception:
-                # fallback to get_or_create
                 try:
                     col = client.get_or_create_collection(name=name)
                 except Exception:
                     return None
-        # Probe dimension by attempting a harmless query with expected_dim; delete if mismatch
         try:
             test_emb = [0.0] * expected_dim
             try:
-                # newer chroma expects embeddings param name 'query_embeddings' or 'embeddings' depending on version
                 col.query(query_embeddings=[test_emb], n_results=1)
             except Exception as qe:
                 msg = str(qe).lower()
@@ -340,7 +641,6 @@ def safe_get_collection(client, name, expected_dim=384):
                     try:
                         print(f"🧹 Deleting collection {name} due to embedding-dimension mismatch ({qe})")
                         client.delete_collection(name=name)
-                        # recreate
                         col = client.create_collection(name=name)
                     except Exception as de:
                         print(f"[WARN] Failed deleting/recreating collection {name}: {de}")
@@ -352,19 +652,11 @@ def safe_get_collection(client, name, expected_dim=384):
         return None
 
 def init_chroma():
-    """
-    Initialize Chroma persistent client and ensure collections exist.
-    Compatible with Chroma v1.2+ using PersistentClient.
-    """
     global chroma_client, chroma_travel_col, chroma_memory_col, chroma_intent_col
-    EXPECTED_DIM = 384  # ĐÃ THAY ĐỔI: all-MiniLM-L6-v2 có 384 dimensions
+    EXPECTED_DIM = 384
     
-    # persist dir (project-local)
     persist_dir = os.path.join(os.getcwd(), "chromadb_data")
     try:
-        # Use PersistentClient for new Chroma versions
-        from chromadb import PersistentClient
-        # create or reuse client in st.session_state
         if "chroma_client" not in st.session_state or st.session_state.get("chroma_client") is None:
             st.session_state["chroma_client"] = PersistentClient(path=persist_dir)
             print("[INIT] Created PersistentClient for Chroma at", persist_dir)
@@ -374,45 +666,24 @@ def init_chroma():
     except Exception as e:
         print(f"[WARN] Failed to init PersistentClient: {e}")
         try:
-            # fallback: try to use PersistentClient directly without session_state
             chroma_client = PersistentClient(path=persist_dir)
         except Exception as e2:
             print(f"[ERROR] PersistentClient fallback failed: {e2}")
             return None, None, None, None
-    # --- Force scan and delete any 1536-dimension collections ---
-    try:
-        for col in chroma_client.list_collections():
-            cname = getattr(col, "name", str(col))
-            try:
-                emb = [0.0] * EXPECTED_DIM
-                col.query(query_embeddings=[emb], n_results=1)
-            except Exception as qe:
-                if "1536" in str(qe):
-                    print(f"🧹 Force deleting old collection {cname} (1536-dim detected)")
-                    try:
-                        chroma_client.delete_collection(name=cname)
-                    except Exception as de:
-                        print(f"[WARN] Could not delete old collection {cname}: {de}")
-    except Exception as e:
-        print(f"[WARN] Force cleanup skipped: {e}")
-
-    # ensure persist dir exists
+    
     try:
         os.makedirs(persist_dir, exist_ok=True)
     except Exception:
         pass
 
-    # create/get our important collections
     travel_col = safe_get_collection(chroma_client, "vietnam_travel_v2", expected_dim=EXPECTED_DIM)
     memory_col = safe_get_collection(chroma_client, "chat_memory_v2", expected_dim=EXPECTED_DIM)
     intent_col = safe_get_collection(chroma_client, "intent_bank_v2", expected_dim=EXPECTED_DIM)
 
-    print("✅ Chroma collections ready (or created):", 
+    print("✅ Chroma collections ready:", 
           f"travel={'OK' if travel_col else 'NO'}, memory={'OK' if memory_col else 'NO'}, intent={'OK' if intent_col else 'NO'}")
-    print(f"✅ Chroma initialized: travel={bool(travel_col)}, memory={bool(memory_col)}, intent={bool(intent_col)}")
     return chroma_client, travel_col, memory_col, intent_col
 
-# --- Initialize Chroma client and collections once (and store in session_state/global) ---
 try:
     chroma_client, chroma_travel_col, chroma_memory_col, chroma_intent_col = init_chroma()
 except Exception as e:
@@ -420,7 +691,7 @@ except Exception as e:
     print(f"[WARN] init_chroma() failed: {e}")
 
 # -------------------------
-# UTILITIES: days extraction (original logic)
+# UTILITY FUNCTIONS (giữ nguyên từ file gốc)
 # -------------------------
 def extract_days_from_text(user_text, start_date=None, end_date=None):
     if start_date and end_date:
@@ -458,9 +729,6 @@ Câu: "{user_text}"
             pass
     return 3
 
-# -------------------------
-# GEOCODING & MAPS
-# -------------------------
 geolocator = Nominatim(user_agent="travel_chatbot_app")
 
 def geocode_city(city_name):
@@ -478,7 +746,6 @@ def show_map(lat, lon, zoom=8, title=""):
         return
 
     lat, lon = float(lat), float(lon)
-
     st.write(f"**Vị trí:** {title} ({lat:.5f}, {lon:.5f})")
 
     view_state = pdk.ViewState(latitude=lat, longitude=lon, zoom=zoom)
@@ -514,46 +781,14 @@ def show_map(lat, lon, zoom=8, title=""):
 
     st.pydeck_chart(deck)
 
-# -------------------------
-# WEATHER (OpenWeatherMap) with AI fallback on location
-# -------------------------
-def resolve_city_via_ai(user_text):
-    if not client:
-        return None
-    try:
-        prompt = f"""
-Bạn là chuyên gia địa lý du lịch Việt Nam.
-Phân tích câu sau để xác định:
-1. 'place': địa danh cụ thể
-2. 'province_or_city': tỉnh/thành của Việt Nam chứa địa danh đó.
-Nếu không xác định được, trả về null.
-JSON ví dụ: {{"place":"Phong Nha - Kẻ Bàng","province_or_city":"Quảng Bình"}}
-Câu: "{user_text}"
-"""
-        response = client.chat.completions.create(
-            model=DEPLOYMENT_NAME,
-            messages=[{"role": "system", "content": prompt}],
-            max_tokens=200,
-            temperature=0
-        )
-        text = response.choices[0].message.content.strip()
-        start, end = text.find("{"), text.rfind("}")
-        if start == -1 or end == -1:
-            return None
-        data = json.loads(text[start:end+1])
-        return data.get("province_or_city")
-    except Exception:
-        return None
-
 def get_weather_forecast(city_name, start_date=None, end_date=None, user_text=None):
     if not OPENWEATHERMAP_API_KEY:
         return "⚠️ Thiếu OpenWeatherMap API Key."
     
-     # THÊM: Xử lý khi không có ngày - lấy ngày hiện tại
     if start_date is None or end_date is None:
         today = datetime.now().date()
         start_date = datetime.combine(today, datetime.min.time())
-        end_date = datetime.combine(today, datetime.min.time())
+        end_date = datetime.combine(today + timedelta(days=3), datetime.min.time())
     
     try:
         def _fetch_weather(city):
@@ -593,9 +828,34 @@ def get_weather_forecast(city_name, start_date=None, end_date=None, user_text=No
     except Exception as e:
         return f"⚠️ Lỗi khi lấy dữ liệu thời tiết: {e}"
 
-# -------------------------
-# PIXABAY IMAGE FUNCTIONS
-# -------------------------
+def resolve_city_via_ai(user_text):
+    if not client:
+        return None
+    try:
+        prompt = f"""
+Bạn là chuyên gia địa lý du lịch Việt Nam.
+Phân tích câu sau để xác định:
+1. 'place': địa danh cụ thể
+2. 'province_or_city': tỉnh/thành của Việt Nam chứa địa danh đó.
+Nếu không xác định được, trả về null.
+JSON ví dụ: {{"place":"Phong Nha - Kẻ Bàng","province_or_city":"Quảng Bình"}}
+Câu: "{user_text}"
+"""
+        response = client.chat.completions.create(
+            model=DEPLOYMENT_NAME,
+            messages=[{"role": "system", "content": prompt}],
+            max_tokens=200,
+            temperature=0
+        )
+        text = response.choices[0].message.content.strip()
+        start, end = text.find("{"), text.rfind("}")
+        if start == -1 or end == -1:
+            return None
+        data = json.loads(text[start:end+1])
+        return data.get("province_or_city")
+    except Exception:
+        return None
+
 def get_pixabay_image(query, per_page=3):
     if not PIXABAY_API_KEY:
         return None
@@ -642,9 +902,6 @@ def get_food_images(food_list):
         images.append({"name": food, "image": img_url})
     return images
 
-# -------------------------
-# RESTAURANTS HYBRID (Google Places + CSV fallback)
-# -------------------------
 def get_restaurants_google(city, api_key, limit=5):
     try:
         query = f"nhà hàng tại {city}, Việt Nam"
@@ -684,9 +941,6 @@ def get_restaurants(city, limit=5):
             return data
     return get_local_restaurants(city, limit)
 
-# -------------------------
-# FOOD AI ASSISTANT (CSV + GPT fallback)
-# -------------------------
 def re_split_foods(s):
     for sep in [",", "|", ";"]:
         if sep in s:
@@ -739,9 +993,6 @@ def get_local_foods_with_fallback(city):
         foods = get_foods_via_gpt(city)
     return foods
 
-# -------------------------
-# SUGGESTIONS / COST / PHOTOSPOTS
-# -------------------------
 def estimate_cost(city, days=3, people=1, style="trung bình"):
     mapping = {"tiết kiệm": 400000, "trung bình": 800000, "cao cấp": 2000000}
     per_day = mapping.get(style, 800000)
@@ -754,28 +1005,20 @@ def suggest_local_food(city):
 def suggest_events(city):
     return f"🎉 Sự kiện ở {city}: lễ hội địa phương, chợ đêm, hội chợ ẩm thực (tuỳ mùa)."
 
-def suggest_photospots(city):
-    return f"📸 Gợi ý check-in: trung tâm lịch sử, bờ sông/biển, quán cà phê có view đẹp."
-
-# -------------------------
-# BILINGUAL CITY & DATE EXTRACTION
-# -------------------------
 def extract_city_and_dates(user_text):
     if not client:
         return None, None, None
     try:
         prompt = f"""
 You are a multilingual travel information extractor.
-Extract 'city','start_date','end_date' (YYYY-MM-DD). 
-If only one date is provided, set both to that date.
-If no date is mentioned, set both start_date and end_date to null.
+Extract 'city','start_date','end_date' (YYYY-MM-DD). If only one date is provided, set both to that date.
 Return JSON only.
 Message: "{user_text}"
 """
         response = client.chat.completions.create(
             model=DEPLOYMENT_NAME,
             messages=[{"role":"system","content":prompt}],
-            max_tokens=300,
+            max_tokens=200,
             temperature=0
         )
         content = response.choices[0].message.content.strip()
@@ -787,54 +1030,32 @@ Message: "{user_text}"
         city = data.get("city")
         s = data.get("start_date")
         e = data.get("end_date")
-        
-        # THÊM: Kiểm tra nếu ngày là null hoặc rỗng
         def _parse(d):
-            if not d or d.lower() == 'null' or d == '':
+            if not d:
                 return None
-            try:
-                dt = datetime.strptime(d, "%Y-%m-%d")
-                return dt
-            except ValueError:
-                return None
-                
+            dt = datetime.strptime(d, "%Y-%m-%d")
+            return dt
         start_dt = _parse(s)
         end_dt = _parse(e)
-        
-        # THÊM: Kiểm tra ngày hợp lệ
-        today = datetime.now().date()
-        if start_dt and start_dt.date() < today:
-            # Nếu ngày trong quá khứ, bỏ qua và coi như không có ngày
-            start_dt = None
-            
-        if end_dt and end_dt.date() < today:
-            end_dt = None
-            
         if start_dt and not end_dt:
             end_dt = start_dt
-            
         return city, start_dt, end_dt
     except Exception:
         return None, None, None
 
 # -------------------------
-# RAG / Chroma helper functions
+# RAG FUNCTIONS
 # -------------------------
 def rag_query_top_k(user_text, k=5):
-    """
-    Lấy top-k đoạn văn từ collection vietnam_travel bằng embedding.
-    Trả về list dict và context string.
-    """
     if chroma_travel_col is None or client is None:
         return [], ""
-    emb = get_embedding_local(user_text)  # ĐÃ THAY ĐỔI: dùng embedding local
+    emb = get_embedding_local(user_text)
     if emb is None:
         return [], ""
     try:
         res = chroma_travel_col.query(query_embeddings=[emb], n_results=k, include=["documents","metadatas","distances"])
         docs = []
         
-        # FIX: Properly handle ChromaDB response structure
         docs_texts = res.get("documents", [[]])
         if docs_texts and isinstance(docs_texts, list):
             docs_texts = docs_texts[0] if docs_texts and isinstance(docs_texts[0], list) else docs_texts
@@ -851,7 +1072,6 @@ def rag_query_top_k(user_text, k=5):
         if distances and isinstance(distances, list):
             distances = distances[0] if distances and isinstance(distances[0], list) else distances
 
-        # Ensure all are lists and have same length
         docs_texts = docs_texts or []
         metadatas = metadatas or [{}] * len(docs_texts)
         ids = ids or [f"doc_{i}" for i in range(len(docs_texts))]
@@ -874,47 +1094,38 @@ def rag_query_top_k(user_text, k=5):
             src = d["metadata"].get("source", "") if isinstance(d.get("metadata"), dict) else ""
             context_parts.append(f"[src:{d['id']}{('|' + src) if src else ''}] {d['text'][:1200]}")
         context = "\n\n".join(context_parts)
-        st.session_state["last_rag_docs"] = docs  # lưu nguồn vào session
+        st.session_state["last_rag_docs"] = docs
         return docs, context
     except Exception as e:
         print(f"[WARN] chroma query error: {e}")
         return [], ""
 
 def add_to_memory_collection(text, role="user", city=None, extra_meta=None):
-    """
-    Lưu embedding + text vào collection chat_memory.
-    """
     if chroma_memory_col is None or client is None:
         return
     try:
-        emb = get_embedding_local(text)  # ĐÃ THAY ĐỔI: dùng embedding local
+        emb = get_embedding_local(text)
         doc_id = f"mem_{int(time.time()*1000)}_{uuid.uuid4().hex[:8]}"
         meta = {"role": role, "city": city or "", "timestamp": datetime.utcnow().isoformat()}
         if extra_meta and isinstance(extra_meta, dict):
             meta.update(extra_meta)
-        # Some chroma versions accept embeddings param, others compute embedding on add
         try:
             chroma_memory_col.add(documents=[text], metadatas=[meta], ids=[doc_id], embeddings=[emb])
         except TypeError:
-            # fallback without embeddings param
             chroma_memory_col.add(documents=[text], metadatas=[meta], ids=[doc_id])
     except Exception as e:
         print(f"[WARN] add to memory failed: {e}")
 
 def recall_recent_memories(user_text, k=5):
-    """
-    Truy vấn chat_memory bằng embedding user_text để lấy các đoạn hội thoại gần nhất.
-    """
     if chroma_memory_col is None or client is None:
         return []
-    emb = get_embedding_local(user_text)  # ĐÃ THAY ĐỔI: dùng embedding local
+    emb = get_embedding_local(user_text)
     if emb is None:
         return []
     try:
         res = chroma_memory_col.query(query_embeddings=[emb], n_results=k, include=["documents","metadatas","distances"])
         items = []
         
-        # FIX: Properly handle ChromaDB response structure
         docs_texts = res.get("documents", [[]])
         if docs_texts and isinstance(docs_texts, list):
             docs_texts = docs_texts[0] if docs_texts and isinstance(docs_texts[0], list) else docs_texts
@@ -931,7 +1142,6 @@ def recall_recent_memories(user_text, k=5):
         if distances and isinstance(distances, list):
             distances = distances[0] if distances and isinstance(distances[0], list) else distances
 
-        # Ensure all are lists and have same length
         docs_texts = docs_texts or []
         metadatas = metadatas or [{}] * len(docs_texts)
         ids = ids or [f"mem_{i}" for i in range(len(docs_texts))]
@@ -954,18 +1164,14 @@ def recall_recent_memories(user_text, k=5):
         return []
 
 def get_intent_via_chroma(user_text, threshold=0.2):
-    """
-    Truy vấn intent_bank tìm intent gần nhất. Nếu distance < threshold => trả về intent id.
-    """
     if chroma_intent_col is None or client is None:
         return None
-    emb = get_embedding_local(user_text)  # ĐÃ THAY ĐỔI: dùng embedding local
+    emb = get_embedding_local(user_text)
     if emb is None:
         return None
     try:
         res = chroma_intent_col.query(query_embeddings=[emb], n_results=1, include=["metadatas","distances"])
         
-        # FIX: Properly handle ChromaDB response structure
         distances = res.get("distances", [[]])
         if distances and isinstance(distances, list):
             distances = distances[0] if distances and isinstance(distances[0], list) else distances
@@ -982,18 +1188,14 @@ def get_intent_via_chroma(user_text, threshold=0.2):
     return None
 
 def recommend_similar_trips(city, k=3):
-    """
-    Tìm trong chat_memory các trips tương tự dựa trên city (hoặc mô tả).
-    """
     if chroma_memory_col is None:
         return []
-    emb = get_embedding_local(city)  # ĐÃ THAY ĐỔI: dùng embedding local
+    emb = get_embedding_local(city)
     if emb is None:
         return []
     try:
         res = chroma_memory_col.query(query_embeddings=[emb], n_results=10, include=["documents","metadatas","distances"])
         
-        # FIX: Properly handle ChromaDB response structure
         docs_texts = res.get("documents", [[]])
         if docs_texts and isinstance(docs_texts, list):
             docs_texts = docs_texts[0] if docs_texts and isinstance(docs_texts[0], list) else docs_texts
@@ -1020,7 +1222,6 @@ def recommend_similar_trips(city, k=3):
         print(f"[WARN] recommend error: {e}")
         return []
 
-# preload intents samples
 def preload_intents():
     if chroma_intent_col is None or client is None:
         return
@@ -1047,32 +1248,32 @@ try:
 except Exception:
     pass
 
-# -------------------------
-# HERO / HEADER SECTION
-# -------------------------
-def render_hero_section(default_city_hint="Hội An, Đà Nẵng, Hà Nội..."):
-    with st.form(key='hero_search_form', clear_on_submit=False):
-        cols = st.columns([3,2,1,1])
-        dest = cols[0].text_input("Điểm đến", placeholder=default_city_hint)
-        dates = cols[1].date_input("Ngày (bắt đầu / kết thúc)", [])
-        people = cols[2].selectbox("Người", [1,2,3,4,5,6], index=0)
-        style = cols[3].selectbox("Mức chi", ["trung bình", "tiết kiệm", "cao cấp"], index=0)
-        submitted = st.form_submit_button("Gợi ý nhanh", use_container_width=True)
-        if submitted:
-            if len(dates) == 2:
-                s = dates[0].strftime("%Y-%m-%d")
-                e = dates[1].strftime("%Y-%m-%d")
-                q = f"Lịch trình { ( (dates[1]-dates[0]).days +1 ) } ngày ở {dest} từ {s} đến {e}"
-            elif len(dates) == 1:
-                s = dates[0].strftime("%Y-%m-%d")
-                q = f"Lịch trình 1 ngày ở {dest} vào {s}"
-            else:
-                q = f"Lịch trình 3 ngày ở {dest}"
-            q += f" • người: {people} • mức: {style}"
-            st.session_state.user_input = q
-            st.rerun()
-    # # THÊM DÒNG NÀY SAU st.rerun() để clear form:
-    # st.session_state.hero_search_form = False
+def seed_vietnam_travel_from_csv(path="data/vietnam_travel_docs.csv"):
+    if chroma_travel_col is None:
+        print("Chroma travel collection not ready")
+        return False
+    if not os.path.exists(path):
+        print("Seed file not found:", path)
+        return False
+    try:
+        docs = []
+        metas = []
+        ids = []
+        import csv
+        with open(path, newline='', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                text = row.get("text") or row.get("description") or ""
+                docs.append(text)
+                metas.append({"title": row.get("title",""), "city": row.get("city",""), "source": row.get("source","")})
+                ids.append(row.get("id") or f"doc_{uuid.uuid4().hex[:8]}")
+        chroma_travel_col.add(documents=docs, metadatas=metas, ids=ids)
+        print(f"Seeded {len(docs)} docs to vietnam_travel")
+        return True
+    except Exception as e:
+        print("Seed error:", e)
+        return False
+
 # -------------------------
 # VOICE HELPERS
 # -------------------------
@@ -1117,15 +1318,11 @@ def write_temp_file_and_convert_to_wav(audio_bytes):
             raise RuntimeError(f"Không thể chuyển đổi audio sang WAV: {e} | {e2}")
 
 # -------------------------
-# TOPIC CLASSIFIER (OpenAI) - dùng để kiểm tra nếu bạn muốn reject non-travel
+# TOPIC CLASSIFIER
 # -------------------------
 def is_travel_related_via_gpt(user_text):
-    """
-    Dùng OpenAI để xác định xem câu hỏi có liên quan đến du lịch không.
-    Trả về True nếu liên quan, False nếu không.
-    """
     if not client:
-        return True  # nếu không có API key thì cho qua luôn
+        return True
 
     try:
         prompt = f"""
@@ -1161,102 +1358,134 @@ Câu người dùng: "{user_text}"
             return False
     except Exception as e:
         print(f"[WARN] Lỗi phân loại chủ đề: {e}")
-    return True  # fallback
+    return True
 
-# -------------------------
+# ========================
 # STREAMLIT UI LAYOUT
-# -------------------------
-render_hero_section()
-main_tab, analytics_tab = st.tabs(["💬 Trò chuyện với [Mây lang thang]", "📊 Thống kê truy vấn"])
+# ========================
 
-with st.sidebar:
-    st.markdown("<div class='logo-title'><img src='https://img.icons8.com/emoji/48/000000/cloud-emoji.png'/> <h2>Mây Lang Thang</h2></div>", unsafe_allow_html=True)
-    st.header("⚙️Cài đặt")
-    info_options = st.multiselect("Hiển thị thông tin",
-                                  ["Weather", "Food", "Map", "Photos", "Cost", "Events"],
-                                  default=["Weather", "Map","Food", "Photos"])
-    st.markdown("---")
-    st.subheader("🎙️ Voice")
-    enable_voice = st.checkbox("Bật nhập liệu bằng giọng nói", value=True)
-    asr_lang = st.selectbox("Ngôn ngữ nhận dạng", ["vi-VN"], index=0)
-    tts_enable = st.checkbox("🔊 Đọc to phản hồi", value=False)
-    tts_lang = st.selectbox("Ngôn ngữ TTS", ["vi"], index=0)
-    st.caption("Yêu cầu: ffmpeg + internet cho gTTS.")
-    # st.markdown("---")
-    # st.write("🗺️Chọn mức zoom bản đồ:")
-    st.subheader("🗺️ Chọn mức zoom bản đồ:")
-    map_zoom = st.slider("Zoom (4 = xa, 15 = gần)", 4, 15, 8)
-    # st.markdown("---")
-    # st.subheader("⚙️ Quản lý dữ liệu")
-    # st.markdown("---")
-    # Nút seed dữ liệu thủ công
-    if st.button("🔄 Seed dữ liệu du lịch", use_container_width=True):
-        try:
-            seed_vietnam_travel_from_csv("data/vietnam_travel_docs.csv")
-            st.success("✅ Đã seed dữ liệu thành công từ [data/vietnam_travel_docs.csv]!")
-        except Exception as e:
-            st.error(f"❌ Lỗi khi seed dữ liệu: {e}")
+# Render Compact Hero
+render_compact_hero()
 
-    # Tự động seed dữ liệu nếu collection trống
-    try:
-        if chroma_travel_col and chroma_travel_col.count() == 0:
-            if seed_vietnam_travel_from_csv("data/vietnam_travel_docs.csv"):
-                st.sidebar.success("✅ Đã tự động seed dữ liệu du lịch")
-            else:
-                st.sidebar.warning("⚠️ Chưa có dữ liệu du lịch. Vui lòng seed thủ công.")
-    except Exception as e:
-        st.sidebar.warning(f"⚠️ Chưa seed được dữ liệu: {e}")
-    st.markdown("---")
-    def status_card(title, ok=True):
-        cls = "status-ok" if ok else "status-bad"
-        icon = "✅" if ok else "⚠️"
-        st.markdown(f"<div class='{cls}'>{icon} {title}</div>", unsafe_allow_html=True)
-    status_card("OpenWeatherMap", bool(OPENWEATHERMAP_API_KEY))
-    # status_card("Google Places", bool(GOOGLE_PLACES_KEY))
-    status_card("Pixabay", bool(PIXABAY_API_KEY))
-    
-    # Thêm trạng thái ChromaDB
-    chroma_status = chroma_client is not None and chroma_travel_col is not None
-    status_card("ChromaDB RAG", chroma_status)
-    
-    # Thêm trạng thái Embedding Model
-    embedding_status = embedding_model is not None
-    status_card("Embedding Model", embedding_status)
-    st.caption("🍜 Food AI: CSV local dữ liệu + GPT fallback")
-    st.markdown("Version: v1.3 + Voice + RAG + Local Embedding")
-    st.markdown("By [Mây Lang Thang](https://#) ❤️")
-# initialize session messages
+# Initialize session state
 if "messages" not in st.session_state:
     st.session_state.messages = [{"role": "system", "content": system_prompt}]
 
-with main_tab:
-    today = datetime.now().date()
-    if "quicksearch" in st.session_state:
-        qs = st.session_state.quicksearch
-        city_qs = qs["city"]; start_qs = qs["start"]; end_qs = qs["end"]
-        people_qs = qs["people"]; style_qs = qs["style"]
-        st.markdown(f"### ✈️ Gợi ý cho chuyến đi {city_qs} ({start_qs} – {end_qs})")
-        weather_qs = get_weather_forecast(city_qs, start_qs, end_qs)
-        cost_qs = estimate_cost(city_qs, (end_qs - start_qs).days + 1, people_qs, style_qs)
-        colA, colB = st.columns(2)
-        with colA:
-            st.markdown(f"**{weather_qs}**")
-            st.markdown(f"**{cost_qs}**")
-        with colB:
-            img = get_city_image(city_qs)
-            if img:
-                st.image(img, caption=f"🏞️ {city_qs}", use_container_width=True)
-            lat, lon, addr = geocode_city(city_qs)
-            if lat and lon:
-                show_map(lat, lon, zoom=map_zoom, title=addr or city_qs)
-        st.markdown("---")
+# Main Tabs
+main_tab, analytics_tab = st.tabs(["💬 Trò chuyện với AI", "📊 Analytics Dashboard"])
 
-    # === VOICE INPUT BAR ===
+# ========================
+# MODERN SIDEBAR
+# ========================
+with st.sidebar:
+    st.markdown("""
+    <div class="sidebar-header">
+        <div class="logo-title">
+            <div class="logo">🌤️</div>
+            <div>
+                <h2>Mây Lang Thang</h2>
+                <p class="sidebar-subtitle">AI Travel Assistant</p>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Settings Card
+    with st.container():
+        st.markdown('<div class="sidebar-card">', unsafe_allow_html=True)
+        st.subheader("⚙️ Cài đặt hiển thị")
+        info_options = st.multiselect(
+            "Thông tin hiển thị",
+            ["Weather", "Food", "Map", "Photos", "Cost", "Events"],
+            default=["Weather", "Map", "Food", "Photos"],
+            label_visibility="collapsed"
+        )
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    # Voice Settings Card
+    with st.container():
+        st.markdown('<div class="sidebar-card">', unsafe_allow_html=True)
+        st.subheader("🎙️ Công cụ giọng nói")
+        enable_voice = st.checkbox("Bật nhập liệu bằng giọng nói", value=True)
+        tts_enable = st.checkbox("🔊 Đọc to phản hồi", value=False)
+        asr_lang = st.selectbox("Ngôn ngữ nhận dạng", ["vi-VN", "en-US"], index=0, label_visibility="collapsed")
+        tts_lang = st.selectbox("Ngôn ngữ đọc", ["vi", "en"], index=0, label_visibility="collapsed")
+        st.caption("Yêu cầu: ffmpeg + internet cho gTTS.")
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    # Map Settings Card
+    with st.container():
+        st.markdown('<div class="sidebar-card">', unsafe_allow_html=True)
+        st.subheader("🗺️ Cài đặt bản đồ")
+        map_zoom = st.slider("Mức zoom bản đồ", 4, 15, 8, label_visibility="collapsed")
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    # System Status Card
+    with st.container():
+        st.markdown('<div class="sidebar-card">', unsafe_allow_html=True)
+        st.subheader("📊 Trạng thái hệ thống")
+        
+        def status_card(title, status, ok=True):
+            icon = "✅" if ok else "⚠️"
+            color = "var(--success)" if ok else "var(--warning)"
+            st.markdown(f"""
+            <div style="display: flex; align-items: center; justify-content: space-between; padding: 0.5rem 0;">
+                <span>{title}</span>
+                <span style="color: {color}; font-weight: 600;">{icon} {status}</span>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        status_card("OpenWeatherMap", "Connected" if OPENWEATHERMAP_API_KEY else "Disabled", bool(OPENWEATHERMAP_API_KEY))
+        status_card("Pixabay Images", "Connected" if PIXABAY_API_KEY else "Disabled", bool(PIXABAY_API_KEY))
+        status_card("ChromaDB RAG", "Connected" if chroma_client else "Disabled", chroma_client is not None)
+        status_card("Embedding Model", "Loaded" if embedding_model else "Failed", embedding_model is not None)
+        status_card("OpenAI API", "Connected" if client else "Disabled", client is not None)
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    # Data Management Card
+    with st.container():
+        st.markdown('<div class="sidebar-card">', unsafe_allow_html=True)
+        st.subheader("🔄 Quản lý dữ liệu")
+        if st.button("🔄 Tải dữ liệu du lịch", use_container_width=True):
+            try:
+                if seed_vietnam_travel_from_csv("data/vietnam_travel_docs.csv"):
+                    st.success("✅ Đã tải dữ liệu thành công!")
+                else:
+                    st.error("❌ Lỗi khi tải dữ liệu")
+            except Exception as e:
+                st.error(f"❌ Lỗi: {e}")
+        
+        # Auto seed check
+        try:
+            if chroma_travel_col and chroma_travel_col.count() == 0:
+                if seed_vietnam_travel_from_csv("data/vietnam_travel_docs.csv"):
+                    st.success("✅ Đã tự động tải dữ liệu du lịch")
+                else:
+                    st.warning("⚠️ Chưa có dữ liệu du lịch. Vui lòng tải thủ công.")
+        except Exception as e:
+            st.warning(f"⚠️ Chưa tải được dữ liệu: {e}")
+            
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    st.markdown("---")
+    st.caption("🍜 Food AI: Dữ liệu địa phương + GPT")
+    st.caption("Version: v2.0 • Modern UI")
+    st.markdown("By [Mây Lang Thang Team](https://#) ❤️")
+
+# ========================
+# MAIN CHAT INTERFACE
+# ========================
+with main_tab:
+    # Quick Actions - Giữ nguyên như cũ
+    render_quick_actions()
+    
+    # Voice Input
     voice_text = None
     if enable_voice:
         audio = mic_recorder(
-            start_prompt="🎙️ [Chat voice] Nói để nhập câu hỏi",
-            stop_prompt="✋Dừng nhận diện giọng nói",
+            start_prompt="🎙️ Nhấn để nói",
+            stop_prompt="⏹️ Dừng thu âm",
             just_once=True,
             key="rec_chat"
         )
@@ -1281,21 +1510,19 @@ with main_tab:
                 except Exception as e:
                     st.error(f"Lỗi nhận diện: {e}")
 
-    # --- Hiển thị lại toàn bộ lịch sử cũ ---
+    # Chat History
     for msg in st.session_state.messages:
         if msg["role"] == "user":
             with st.chat_message("user", avatar="🧭"):
                 st.markdown(f"<div class='user-message'>{msg['content']}</div>", unsafe_allow_html=True)
         elif msg["role"] == "assistant":
             with st.chat_message("assistant", avatar="🤖"):
-                st.markdown(f"<div class='assistant-bubble'>{msg['content']}</div>", unsafe_allow_html=True)
+                st.markdown(f"<div class='assistant-message'>{msg['content']}</div>", unsafe_allow_html=True)
 
-    # Chat input (gõ phím)
-    user_input = st.chat_input("Mời bạn đặt câu hỏi:")
-    # Xóa state sau khi đã sử dụng để tránh lặp lại
+    # Chat Input
+    user_input = st.chat_input("Nhập câu hỏi về du lịch Việt Nam...")
     if "user_input" in st.session_state and st.session_state.user_input:
         user_input = st.session_state.user_input
-        # QUAN TRỌNG: Xóa state ngay sau khi sử dụng
         del st.session_state.user_input
 
     if user_input:
@@ -1303,14 +1530,13 @@ with main_tab:
             st.markdown(f"<div class='user-message'>{user_input}</div>", unsafe_allow_html=True)
         st.session_state.messages.append({"role": "user", "content": user_input})
 
-        # Optional: reject non-travel topics via GPT classifier
+        # Topic classification
         try:
             if not is_travel_related_via_gpt(user_input):
                 msg = "Xin lỗi 😅, tôi chỉ hỗ trợ các câu hỏi liên quan đến **du lịch Việt Nam**, như thời tiết, địa điểm, món ăn, lịch trình..."
                 with st.chat_message("assistant", avatar="🤖"):
                     st.markdown(msg)
                 st.session_state.messages.append({"role": "assistant", "content": msg})
-                # add to memory (optional)
                 try:
                     add_to_memory_collection(user_input, role="user")
                     add_to_memory_collection(msg, role="assistant")
@@ -1318,37 +1544,24 @@ with main_tab:
                     pass
                 st.stop()
         except Exception:
-            # nếu classifier lỗi thì tiếp tục bình thường
             pass
 
         city_guess, start_date, end_date = extract_city_and_dates(user_input)
-
-        # SỬA: Xử lý khi không có ngày cụ thể - lấy ngày hiện tại
-        today = datetime.now().date()
-        if start_date is None:
-            start_date = datetime.combine(today, datetime.min.time())
-        if end_date is None:
-            end_date = datetime.combine(today, datetime.min.time())
-
-        # Đảm bảo end_date không nhỏ hơn start_date
-        if end_date < start_date:
-            end_date = start_date
-
         days = extract_days_from_text(user_input, start_date, end_date)
         
-        # Reset các biến tracking
+        # Reset tracking variables
         rag_used = False
         sources_count = 0
         intent_used = None
         memory_used = False
 
-        # SỬA: Kiểm tra cả start_date và đảm bảo nó không phải là ngày hiện tại (tránh cảnh báo không cần thiết)
-        if start_date and start_date.date() != datetime.now().date():
+        if start_date:
             today = datetime.now().date()
             max_forecast_date = today + timedelta(days=5)
             if start_date.date() > max_forecast_date:
                 st.warning(f"⚠️ Lưu ý: OpenWeather chỉ cung cấp dự báo ~5 ngày. Bạn yêu cầu bắt đầu {start_date.strftime('%d/%m/%Y')}.")
 
+        # Quick info blocks
         blocks = []
         if city_guess and "Weather" in info_options:
             blocks.append(get_weather_forecast(city_guess, start_date, end_date, user_input))
@@ -1364,18 +1577,19 @@ with main_tab:
                 else:
                     st.write(b)
 
-        with st.spinner("⏳ Đang soạn phản hồi..."):
+        # AI Response Generation
+        with st.spinner("🤖 AI đang phân tích..."):
             try:
-                progress_text = "AI đang phân tích dữ liệu du lịch..."
+                progress_text = "Đang xử lý yêu cầu của bạn..."
                 progress_bar = st.progress(0, text=progress_text)
                 for percent_complete in range(0, 101, 20):
-                    time.sleep(0.08)
+                    time.sleep(0.05)
                     progress_bar.progress(percent_complete, text=progress_text)
                 progress_bar.empty()
 
                 assistant_text = ""
                 if client:
-                    # --- RAG + Intent + Memory enhanced generation ---
+                    # RAG + Intent + Memory enhanced generation
                     try:
                         detected_intent = get_intent_via_chroma(user_input, threshold=0.18)
                         if detected_intent:
@@ -1390,7 +1604,6 @@ with main_tab:
                                 days_local = extract_days_from_text(user_input, start_date, end_date)
                                 assistant_text = f"Lịch trình gợi ý cho {city_guess}, {days_local} ngày:\n1) Ngày 1: ...\n2) Ngày 2: ...\n3) Ngày 3: ..."
                             else:
-                                # Unknown or not handled intent -> fallback to full generation
                                 detected_intent = None
                                 intent_used = None
                         if not detected_intent:
@@ -1416,7 +1629,7 @@ with main_tab:
                             augmentation += "--- Khi trả lời, nếu dùng thông tin từ phần trên hãy đánh dấu nguồn như [src:ID] hoặc [mem:ID]. ---\n"
 
                             temp_messages = [{"role":"system", "content": system_prompt + "\n\n" + augmentation}]
-                            temp_messages.extend(st.session_state.messages[-12:])  # keep last 12 msgs
+                            temp_messages.extend(st.session_state.messages[-12:])
                             response = client.chat.completions.create(
                                 model=DEPLOYMENT_NAME,
                                 messages=temp_messages,
@@ -1442,63 +1655,61 @@ with main_tab:
 
                 st.session_state.messages.append({"role": "assistant", "content": assistant_text})
 
+                # Display response with typing effect
                 with st.chat_message("assistant", avatar="🤖"):
                     placeholder = st.empty()
                     display_text = ""
                     for char in assistant_text:
                         display_text += char
-                        placeholder.markdown(display_text + "▌")
+                        placeholder.markdown(f"<div class='assistant-message'>{display_text}▌</div>", unsafe_allow_html=True)
                         time.sleep(0.01)
                     time.sleep(0.3)
                     placeholder.empty()
-                    with st.container():
-                        # highlight citations like [src:...] or [mem:...]
-                        display_text_processed = re.sub(r'(\[src:[^\]]+\])', r'**\1**', assistant_text)
-                        display_text_processed = re.sub(r'(\[mem:[^\]]+\])', r'**\1**', display_text_processed)
-                        st.markdown("<div class='assistant-bubble'>", unsafe_allow_html=True)
-                        st.markdown(display_text_processed)
-                        st.markdown("</div>", unsafe_allow_html=True)
+                    
+                    # Final display with source highlighting
+                    display_text_processed = re.sub(r'(\[src:[^\]]+\])', r'**\1**', assistant_text)
+                    display_text_processed = re.sub(r'(\[mem:[^\]]+\])', r'**\1**', display_text_processed)
+                    st.markdown(f"<div class='assistant-message'>{display_text_processed}</div>", unsafe_allow_html=True)
+                    
+                    # Source references
+                    if rag_used or intent_used or memory_used:
+                        st.markdown("---")
+                        st.subheader("🔍 Nguồn tham khảo")
                         
-                        # === HIỂN THỊ NGUỒN THAM KHẢO CHI TIẾT ===
-                        if rag_used or intent_used or memory_used:
-                            st.markdown("---")
-                            st.subheader("🔍 Nguồn tham khảo")
-                            
-                            # Hiển thị thông tin về ChromaDB
-                            if rag_used and sources_count > 0:
-                                st.markdown(f'<div class="source-badge source-chroma">📚 <b>ChromaDB RAG</b>: Sử dụng {sources_count} tài liệu từ cơ sở tri thức du lịch</div>', unsafe_allow_html=True)
-                            
-                            if intent_used:
-                                st.markdown(f'<div class="source-badge source-intent">🎯 <b>Intent Matching</b>: Phát hiện intent "{intent_used}" từ ChromaDB</div>', unsafe_allow_html=True)
-                            
-                            if memory_used:
-                                st.markdown(f'<div class="source-badge source-memory">💭 <b>Memory Recall</b>: Tham khảo hội thoại trước đó từ ChromaDB</div>', unsafe_allow_html=True)
-                            
-                            # Hiển thị chi tiết các tài liệu RAG
-                            if "last_rag_docs" in st.session_state and st.session_state["last_rag_docs"]:
-                                sources = st.session_state["last_rag_docs"]
-                                with st.expander(f"📖 Chi tiết {len(sources)} tài liệu tham khảo"):
-                                    for i, src in enumerate(sources, 1):
-                                        meta = src.get("metadata", {}) or {}
-                                        title = meta.get("title", "Không có tiêu đề")
-                                        city = meta.get("city", "")
-                                        srcname = meta.get("source", "Nội bộ")
-                                        distance = src.get("distance")
-                                        
-                                        st.markdown(f"**{i}. {title}**")
-                                        if city:
-                                            st.caption(f"📍 {city}")
-                                        if srcname:
-                                            st.caption(f"📚 Nguồn: {srcname}")
-                                        if distance is not None:
-                                            st.caption(f"📊 Độ tương đồng: {1 - distance:.3f}")
-                                        st.markdown(f"*{src['text'][:200]}...*")
-                                        st.markdown("---")
+                        if rag_used and sources_count > 0:
+                            st.markdown(f'<div class="source-badge source-chroma">📚 <b>ChromaDB RAG</b>: Sử dụng {sources_count} tài liệu từ cơ sở tri thức du lịch</div>', unsafe_allow_html=True)
+                        
+                        if intent_used:
+                            st.markdown(f'<div class="source-badge source-intent">🎯 <b>Intent Matching</b>: Phát hiện intent "{intent_used}" từ ChromaDB</div>', unsafe_allow_html=True)
+                        
+                        if memory_used:
+                            st.markdown(f'<div class="source-badge source-memory">💭 <b>Memory Recall</b>: Tham khảo hội thoại trước đó từ ChromaDB</div>', unsafe_allow_html=True)
+                        
+                        # Detailed RAG sources
+                        if "last_rag_docs" in st.session_state and st.session_state["last_rag_docs"]:
+                            sources = st.session_state["last_rag_docs"]
+                            with st.expander(f"📖 Chi tiết {len(sources)} tài liệu tham khảo"):
+                                for i, src in enumerate(sources, 1):
+                                    meta = src.get("metadata", {}) or {}
+                                    title = meta.get("title", "Không có tiêu đề")
+                                    city = meta.get("city", "")
+                                    srcname = meta.get("source", "Nội bộ")
+                                    distance = src.get("distance")
+                                    
+                                    st.markdown(f"**{i}. {title}**")
+                                    if city:
+                                        st.caption(f"📍 {city}")
+                                    if srcname:
+                                        st.caption(f"📚 Nguồn: {srcname}")
+                                    if distance is not None:
+                                        st.caption(f"📊 Độ tương đồng: {1 - distance:.3f}")
+                                    st.markdown(f"*{src['text'][:200]}...*")
+                                    st.markdown("---")
 
-                # Log interaction với thông tin RAG
+                # Log interaction
                 log_interaction(user_input, city_guess, start_date, end_date, intent_used, rag_used, sources_count)
 
-                # === TTS (đọc to phản hồi) ===
+                # TTS
                 if tts_enable:
                     try:
                         tts = gTTS(assistant_text, lang=tts_lang)
@@ -1515,38 +1726,51 @@ with main_tab:
 
                 st.balloons()
             except Exception as e:
-                st.error(f"⚠️ Lỗi khi gọi OpenAI: {e}")
+                st.error(f"⚠️ Lỗi khi xử lý yêu cầu: {e}")
 
+        # Additional Info Display
         lat, lon, addr = (None, None, None)
         if city_guess:
             lat, lon, addr = geocode_city(city_guess)
+        
         cols = st.columns([2, 3])
         with cols[0]:
-            if "Map" in info_options:
+            if "Map" in info_options and city_guess:
+                st.markdown("### 🗺️ Bản đồ")
                 show_map(lat, lon, zoom=map_zoom, title=addr or city_guess)
-            if "Photos" in info_options:
+            
+            if "Photos" in info_options and city_guess:
+                st.markdown("### 🏞️ Hình ảnh")
                 img = get_city_image(city_guess)
                 if img:
-                    st.image(img, caption=f"🏞️ {city_guess}", use_container_width=True)
+                    st.image(img, caption=f"{city_guess}", use_container_width=True)
                 else:
                     st.info("Không tìm thấy ảnh minh họa.")
+        
         with cols[1]:
-            if "Food" in info_options:
-                st.subheader(f"🍽️ Ẩm thực & Nhà hàng tại {city_guess or 'địa điểm'}")
-                foods = get_local_foods_with_fallback(city_guess) if city_guess else []
+            if "Food" in info_options and city_guess:
+                st.markdown("### 🍽️ Ẩm thực & Nhà hàng")
+                
+                # Local Foods
+                foods = get_local_foods_with_fallback(city_guess)
                 if foods:
                     st.markdown("#### 🥘 Đặc sản nổi bật")
                     food_images = get_food_images(foods)
-                    img_cols = st.columns(min(len(food_images), 4))
-                    for i, item in enumerate(food_images):
-                        with img_cols[i % len(img_cols)]:
-                            if item["image"]:
-                                st.image(item["image"], caption=item["name"], use_container_width=True)
-                            else:
-                                st.write(f"- {item['name']}")
+                    if food_images:
+                        img_cols = st.columns(min(len(food_images), 4))
+                        for i, item in enumerate(food_images):
+                            with img_cols[i % len(img_cols)]:
+                                if item["image"]:
+                                    st.image(item["image"], caption=item["name"], use_container_width=True)
+                                else:
+                                    st.write(f"- {item['name']}")
+                    else:
+                        for food in foods:
+                            st.write(f"- {food}")
                 else:
-                    st.info("Không tìm thấy món đặc trưng (CSV/GPT fallback không trả kết quả).")
-            if city_guess:
+                    st.info("Không tìm thấy món đặc trưng.")
+                
+                # Restaurants
                 st.markdown("#### 🍴 Nhà hàng gợi ý")
                 restaurants = get_restaurants(city_guess, limit=5)
                 if restaurants:
@@ -1560,15 +1784,18 @@ with main_tab:
                             maps_url = r.get("maps_url", "")
                             st.markdown(f"- **{name}** {f'• ⭐ {rating}' if rating else ''}  \n  {addr_text}  " + (f"[Bản đồ]({maps_url})" if maps_url else ""))
                 else:
-                    st.info("Không có dữ liệu nhà hàng (CSV/Google Places fallback).")
+                    st.info("Không có dữ liệu nhà hàng.")
 
+# ========================
+# ANALYTICS TAB
+# ========================
 with analytics_tab:
-    st.header("📊 Thống kê truy vấn (gần đây)")
+    st.markdown('<div class="surface-card">', unsafe_allow_html=True)
+    st.header("📊 Analytics Dashboard")
     
-    # Thêm thống kê RAG - ĐÃ SỬA LỖI
+    # Metrics Row
     try:
         conn = sqlite3.connect(DB_PATH)
-        # Kiểm tra xem cột có tồn tại không
         cur = conn.cursor()
         cur.execute("PRAGMA table_info(interactions)")
         columns = [col[1] for col in cur.fetchall()]
@@ -1576,91 +1803,134 @@ with analytics_tab:
         df_logs = pd.read_sql("SELECT * FROM interactions ORDER BY timestamp DESC LIMIT 1000", conn)
         conn.close()
         
-        if not df_logs.empty and 'rag_used' in columns:
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                total_rag = df_logs['rag_used'].sum()
-                st.metric("Truy vấn sử dụng RAG", f"{total_rag}/{len(df_logs)}")
-            with col2:
-                avg_sources = df_logs['sources_count'].mean()
-                st.metric("Trung bình nguồn/RAG", f"{avg_sources:.1f}")
-            with col3:
-                rag_rate = (total_rag / len(df_logs)) * 100
-                st.metric("Tỷ lệ sử dụng RAG", f"{rag_rate:.1f}%")
-    except Exception as e:
-        st.warning(f"Không thể load thống kê RAG: {e}")
-    
-    with st.expander("🗑️ Xóa lịch sử truy vấn"):
-        st.warning("⚠️ Thao tác này sẽ xóa toàn bộ lịch sử truy vấn đã lưu trong cơ sở dữ liệu (SQLite). Không thể hoàn tác.")
-        confirm_delete = st.checkbox("Tôi hiểu và muốn xóa toàn bộ lịch sử truy vấn", value=False)
-        if confirm_delete:
-            if st.button("✅ Xác nhận xóa toàn bộ lịch sử"):
-                try:
-                    conn = sqlite3.connect(DB_PATH)
-                    cur = conn.cursor()
-                    cur.execute("DELETE FROM interactions")
-                    conn.commit()
-                    conn.close()
-                    st.success("✅ Đã xóa toàn bộ lịch sử truy vấn.")
-                except Exception as e:
-                    st.error(f"⚠️ Lỗi khi xóa dữ liệu: {e}")
-        else:
-            st.info("👉 Hãy tick vào ô xác nhận trước khi xóa lịch sử.")
-    
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        # Kiểm tra schema trước khi query
-        cur = conn.cursor()
-        cur.execute("PRAGMA table_info(interactions)")
-        columns = [col[1] for col in cur.fetchall()]
-        
-        # Chỉ chọn các cột tồn tại
-        select_columns = ["timestamp", "user_input", "city"]
-        if 'rag_used' in columns:
-            select_columns.extend(["rag_used", "sources_count"])
-        if 'intent' in columns:
-            select_columns.append("intent")
-            
-        df_logs = pd.read_sql(f"SELECT {', '.join(select_columns)} FROM interactions ORDER BY timestamp DESC LIMIT 1000", conn)
-        conn.close()
-        
-        total = int(df_logs.shape[0]) if not df_logs.empty else 0
-        st.metric("Tổng tương tác", total)
-        
         if not df_logs.empty:
-            df_logs['timestamp_dt'] = pd.to_datetime(df_logs['timestamp'])
-            df_logs['date'] = df_logs['timestamp_dt'].dt.date
+            col1, col2, col3, col4 = st.columns(4)
             
-            # Biểu đồ sử dụng RAG - chỉ hiển thị nếu có cột rag_used
-            if 'rag_used' in df_logs.columns:
-                rag_series = df_logs.groupby('date').agg({
+            with col1:
+                total_interactions = len(df_logs)
+                st.metric("Tổng tương tác", f"{total_interactions:,}")
+            
+            with col2:
+                if 'rag_used' in columns:
+                    rag_count = df_logs['rag_used'].sum()
+                    rag_rate = (rag_count / total_interactions) * 100
+                    st.metric("Tỷ lệ sử dụng RAG", f"{rag_rate:.1f}%")
+                else:
+                    st.metric("Tỷ lệ RAG", "N/A")
+            
+            with col3:
+                if 'sources_count' in columns:
+                    avg_sources = df_logs['sources_count'].mean()
+                    st.metric("TB nguồn/RAG", f"{avg_sources:.1f}")
+                else:
+                    st.metric("TB nguồn", "N/A")
+            
+            with col4:
+                unique_cities = df_logs['city'].nunique()
+                st.metric("Điểm đến", unique_cities)
+            
+            # Charts
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("#### 📈 Hoạt động theo ngày")
+                if not df_logs.empty:
+                    df_logs['timestamp_dt'] = pd.to_datetime(df_logs['timestamp'])
+                    df_logs['date'] = df_logs['timestamp_dt'].dt.date
+                    daily_counts = df_logs.groupby('date').size().reset_index(name='count')
+                    
+                    fig_daily = px.line(daily_counts, x='date', y='count', 
+                                      title='Số lượng truy vấn theo ngày',
+                                      line_shape='spline')
+                    fig_daily.update_traces(line=dict(color='#2563eb', width=3))
+                    fig_daily.update_layout(plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)')
+                    st.plotly_chart(fig_daily, use_container_width=True)
+            
+            with col2:
+                st.markdown("#### 📍 Top điểm đến")
+                if not df_logs.empty:
+                    city_counts = df_logs['city'].value_counts().head(10).reset_index()
+                    city_counts.columns = ['city', 'count']
+                    
+                    fig_cities = px.bar(city_counts, x='count', y='city', 
+                                      orientation='h',
+                                      title='Thành phố được hỏi nhiều nhất',
+                                      color='count',
+                                      color_continuous_scale='blues')
+                    fig_cities.update_layout(plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)')
+                    st.plotly_chart(fig_cities, use_container_width=True)
+            
+            # RAG Usage Chart
+            if 'rag_used' in columns:
+                st.markdown("#### 🔍 Sử dụng RAG")
+                rag_daily = df_logs.groupby('date').agg({
                     'rag_used': 'sum',
                     'timestamp': 'count'
                 }).reset_index()
-                rag_series.columns = ['date', 'rag_queries', 'total_queries']
-                rag_series['non_rag_queries'] = rag_series['total_queries'] - rag_series['rag_queries']
+                rag_daily.columns = ['date', 'rag_queries', 'total_queries']
+                rag_daily['non_rag_queries'] = rag_daily['total_queries'] - rag_daily['rag_queries']
                 
-                fig_rag = px.bar(rag_series, x='date', y=['rag_queries', 'non_rag_queries'], 
-                                title='📈 Sử dụng RAG theo ngày', 
-                                color_discrete_map={'rag_queries': '#2196f3', 'non_rag_queries': '#ff9800'})
+                fig_rag = px.area(rag_daily, x='date', y=['rag_queries', 'non_rag_queries'],
+                                title='Phân bổ sử dụng RAG theo thời gian',
+                                color_discrete_map={'rag_queries': '#2563eb', 'non_rag_queries': '#94a3b8'})
+                fig_rag.update_layout(plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)')
                 st.plotly_chart(fig_rag, use_container_width=True)
             
-            series = df_logs.groupby('date').size().reset_index(name='queries')
-            fig = px.bar(series, x='date', y='queries', title='📈 Số truy vấn mỗi ngày', color='queries', color_continuous_scale='Blues')
-            st.plotly_chart(fig, use_container_width=True)
+            # Data Table
+            st.markdown("#### 📋 Dữ liệu chi tiết")
+            display_cols = ['timestamp', 'user_input', 'city']
+            if 'rag_used' in columns:
+                display_cols.extend(['rag_used', 'sources_count'])
+            if 'intent' in columns:
+                display_cols.append('intent')
+                
+            display_df = df_logs[display_cols].head(100)
+            st.dataframe(display_df, use_container_width=True)
             
-            top_cities = df_logs['city'].fillna("Unknown").value_counts().reset_index()
-            top_cities.columns = ['city', 'count']
-            if not top_cities.empty:
-                fig2 = px.bar(top_cities.head(10), x='city', y='count', title='📍 Top địa điểm được hỏi', color='count', color_continuous_scale='Viridis')
-                st.plotly_chart(fig2, use_container_width=True)
-            
-            # Hiển thị chi tiết với thông tin RAG
-            st.dataframe(df_logs)
         else:
-            st.info("Chưa có truy vấn nào được ghi nhận.")
+            st.info("Chưa có dữ liệu thống kê.")
+            
     except Exception as e:
-        st.warning(f"Lỗi đọc dữ liệu: {e}")
+        st.error(f"Lỗi khi tải dữ liệu analytics: {e}")
+    
+    # Data Management
+    st.markdown("#### 🗃️ Quản lý dữ liệu")
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("🔄 Làm mới dữ liệu", use_container_width=True):
+            st.rerun()
+    
+    with col2:
+        if st.button("📥 Xuất dữ liệu", use_container_width=True):
+            try:
+                conn = sqlite3.connect(DB_PATH)
+                df_export = pd.read_sql("SELECT * FROM interactions", conn)
+                conn.close()
+                
+                csv = df_export.to_csv(index=False)
+                st.download_button(
+                    label="📥 Tải file CSV",
+                    data=csv,
+                    file_name=f"travel_bot_analytics_{datetime.now().strftime('%Y%m%d')}.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+            except Exception as e:
+                st.error(f"Lỗi khi xuất dữ liệu: {e}")
+    
+    st.markdown('</div>', unsafe_allow_html=True)
 
+# ========================
+# FOOTER
+# ========================
 st.markdown("---")
-st.markdown("<div class='small-muted'>Tip: Bạn có thể yêu cầu cụ thể như 'Lịch trình 3 ngày ở Hội An', 'Đặc sản Sapa', hoặc 'Thời tiết Đà Nẵng 2025-10-20 đến 2025-10-22'.</div>", unsafe_allow_html=True)
+st.markdown(
+    """
+    <div style="text-align: center; color: var(--text-muted); padding: 1rem 0;">
+        <p>💡 <strong>Mẹo sử dụng:</strong> Bạn có thể yêu cầu cụ thể như 'Lịch trình 3 ngày ở Hội An', 'Đặc sản Sapa', hoặc 'Thời tiết Đà Nẵng tuần tới'.</p>
+        <p style="margin-top: 0.5rem;">🌤️ <strong>Mây Lang Thang</strong> - AI Travel Assistant • Phiên bản 2.0</p>
+    </div>
+    """, 
+    unsafe_allow_html=True
+)
