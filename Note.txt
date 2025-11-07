@@ -4,6 +4,8 @@ ngrok http 8501
 #Tự động tạo file requirements.txt
 pip freeze > requirements.txt
 
+import 
+
 streamlit run Travel_Chat_Bot &>/dev/null&
 
 # api
