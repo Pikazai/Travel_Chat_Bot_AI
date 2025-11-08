@@ -21,7 +21,6 @@ import pydeck as pdk
 import re
 import time
 import plotly.express as px
-import random
 
 # === VOICE imports (mới) ===
 import io
@@ -136,52 +135,6 @@ st.markdown(
       background: #f3e5f5;
       border-left: 4px solid #9c27b0;
     }
-
-        /* HEADER BANNER */
-    .header-banner {
-      position: relative;
-      width: 100%;
-      height: 120px;
-      border-radius: 12px;
-      overflow: hidden;
-      margin-bottom: 18px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      background: linear-gradient(90deg, rgba(43,76,126,0.95), rgba(41,128,185,0.85));
-      color: white;
-      box-shadow: 0 6px 20px rgba(43,76,126,0.12);
-    }
-    .header-banner__content {
-      display: flex;
-      align-items: center;
-      gap: 16px;
-      width: 100%;
-      max-width: 1100px;
-      padding: 12px 20px;
-    }
-    .header-banner__logo {
-      width: 64px; height: 64px;
-      border-radius: 12px;
-      background: rgba(255,255,255,0.08);
-      display: flex; align-items: center; justify-content: center;
-      font-size: 30px;
-    }
-    .header-banner__title {
-      font-size: 20px;
-      font-weight: 700;
-      margin: 0;
-    }
-    .header-banner__subtitle {
-      margin: 0;
-      font-size: 13px;
-      opacity: 0.95;
-    }
-    @media (max-width: 768px) {
-      .header-banner { height: 100px; }
-      .header-banner__title { font-size: 16px; }
-    }
-
     /* HERO */
     .hero {
       position: relative;
@@ -289,7 +242,6 @@ Bạn là Hướng dẫn viên du lịch ảo "Alex" - chuyên gia am hiểu sâ
 - Gợi ý các trải nghiệm off-the-beaten-path
 
 """
-
 
 # -------------------------
 # DB LOGGING (SQLite) - ĐÃ SỬA SCHEMA
@@ -766,7 +718,6 @@ def get_city_image(city):
     ]
     for q in queries:
         img = get_pixabay_image(q)
-        print("Image city:" +q)
         if img:
             return img
     return "https://via.placeholder.com/1200x800?text=No+Image"
@@ -1039,7 +990,7 @@ def rag_query_top_k_enhanced(user_text, k=5, target_city=None):
         # THỬ NGHIỆM: Query thông thường trước
         res_normal = chroma_travel_col.query(
             query_embeddings=[emb],
-            n_results=k * 10,  # Lấy nhiều hơn để lọc sau
+            n_results=k * 3,  # Lấy nhiều hơn để lọc sau
             include=["documents", "metadatas", "distances"]
         )
         all_results = process_chroma_results(res_normal)
@@ -1454,67 +1405,6 @@ except Exception:
     pass
 
 # -------------------------
-# HEADER BANNER (NEW)
-def render_header_banner(
-    banner_title="Khám phá Việt Nam cùng Mây Lang Thang",
-    banner_subtitle="Gợi ý lịch trình — Đặt câu hỏi bằng văn bản hoặc giọng nói",
-    image_url=None
-):
-    """Render a compact full-width header banner above the hero search form."""
-    try:
-        # if image_url is None and 'get_city_image' in globals():
-        #     image_url = get_city_image('Vietnam travel landscape') or None
-        if image_url is None and 'get_city_image' in globals():
-            vietnam_spots = [
-                "Vinh Ha Long",
-                "Sa Pa",
-                "Da Nang",
-                "Hoi An",
-                "Nha Trang",
-                "Da Lat",
-                "Phu Quoc",
-                "Hue",
-                "Ha Giang",
-                "Can Tho",
-                "Quang Binh hang dong",
-                "Mui Ne",
-                "Tam Coc Ninh Binh",
-                "Ba Na Hills",
-                "Cat Ba",
-                "Co To",
-                "Vung Tau",
-                "Tay Ninh nui Ba Den",
-                "Phan Rang",
-                "Pleiku"
-            ]
-            random_place = random.choice(vietnam_spots)
-            image_url = get_city_image(f"{random_place}") or None
-    except Exception:
-        image_url = None
-
-    if image_url:
-        bg_style = (
-            f"background-image: linear-gradient(90deg, rgba(43,76,126,0.1), rgba(41,128,185,0.5)), "
-            f"url('{image_url}'); background-size: cover; background-position: center;"
-        )
-    else:
-        bg_style = ""
-
-    banner_html = f"""
-    <div class='header-banner' style="{bg_style}">
-      <div class='header-banner__content'>
-        <div class='header-banner__logo'>☁️</div>
-        <div style='flex:1'>
-          <div class='header-banner__title'>{banner_title}</div>
-          <div class='header-banner__subtitle'>{banner_subtitle}</div>
-        </div>
-      </div>
-    </div>
-    """
-    st.markdown(banner_html, unsafe_allow_html=True)
-
-
-# -------------------------
 # HERO / HEADER SECTION
 # -------------------------
 def render_hero_section(default_city_hint="Hội An, Đà Nẵng, Hà Nội..."):
@@ -1586,7 +1476,7 @@ def write_temp_file_and_convert_to_wav(audio_bytes):
 # -------------------------
 # TOPIC CLASSIFIER (OpenAI) - dùng để kiểm tra nếu bạn muốn reject non-travel
 # -------------------------
-def is_travel_related_via_gpt1(user_text):
+def is_travel_related_via_gpt(user_text):
     """
     Dùng OpenAI để xác định xem câu hỏi có liên quan đến du lịch không.
     Trả về True nếu liên quan, False nếu không.
@@ -1619,7 +1509,7 @@ Câu người dùng: "{user_text}"
             model=DEPLOYMENT_NAME,
             messages=[{"role": "system", "content": prompt}],
             temperature=0,
-            max_tokens=100,
+            max_tokens=30,
         )
         text = response.choices[0].message.content.strip().lower()
         if '"related": true' in text:
@@ -1629,64 +1519,10 @@ Câu người dùng: "{user_text}"
     except Exception as e:
         print(f"[WARN] Lỗi phân loại chủ đề: {e}")
     return True  # fallback
-
-
-def is_travel_related_via_gpt(user_text):
-    """
-    Dùng OpenAI để xác định xem câu hỏi có liên quan đến du lịch Việt Nam không,
-    và loại bỏ các địa điểm không có thật hoặc phi thực tế.
-    Trả về True nếu liên quan và hợp lệ, False nếu không.
-    """
-    if not client:
-        return True  # nếu không có API key thì cho qua luôn
-
-    try:
-        prompt = f"""
-Bạn là bộ phân loại chủ đề thông minh cho chatbot du lịch Việt Nam.
-
-Nhiệm vụ:
-1️⃣ Xác định xem câu sau có liên quan đến lĩnh vực *du lịch tại Việt Nam* hay không.
-2️⃣ Nếu có nhắc đến một địa điểm, hãy kiểm tra xem địa điểm đó có thật, tồn tại trên bản đồ hoặc được biết đến trong đời sống không.
-   - Các địa điểm **có thật**: Hà Nội, Đà Nẵng, Sa Pa, Vịnh Hạ Long, Hội An, Nha Trang, Đà Lạt, Phú Quốc, Huế, v.v.
-   - Các địa điểm **không thật / phi thực tế**: hành tinh khác, vương quốc tưởng tượng, thành phố ma, thế giới cổ tích, nơi không tồn tại, v.v.
-
-Các chủ đề được coi là liên quan bao gồm:
-- địa điểm, thành phố, tỉnh, danh lam thắng cảnh, du lịch sinh thái
-- thời tiết, khí hậu
-- lịch trình du lịch, tour, chi phí, gợi ý điểm đến
-- món ăn địa phương, đặc sản, nhà hàng
-- khách sạn, homestay, resort
-- sự kiện, lễ hội, văn hoá vùng miền
-
-Nếu KHÔNG thuộc những chủ đề trên, hoặc liên quan đến địa điểm **không có thật / không thực tế**, hãy trả về JSON:
-{{"related": false, "reason": "not_real_or_not_travel"}}
-
-Nếu CÓ liên quan và địa điểm có thật, trả về JSON:
-{{"related": true}}
-
-Câu người dùng: "{user_text}"
-"""
-
-        response = client.chat.completions.create(
-            model=DEPLOYMENT_NAME,
-            messages=[{"role": "system", "content": prompt}],
-            temperature=0,
-            max_tokens=150,
-        )
-        text = response.choices[0].message.content.strip().lower()
-        if '"related": true' in text:
-            return True
-        if '"related": false' in text:
-            return False
-    except Exception as e:
-        print(f"[WARN] Lỗi phân loại chủ đề: {e}")
-    return True  # fallback
-
 
 # -------------------------
 # STREAMLIT UI LAYOUT
 # -------------------------
-render_header_banner()
 render_hero_section()
 main_tab, analytics_tab = st.tabs(["💬 Trò chuyện với [Mây lang thang]", "📊 Thống kê truy vấn"])
 
