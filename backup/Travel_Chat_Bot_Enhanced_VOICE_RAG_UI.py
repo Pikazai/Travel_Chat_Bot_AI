@@ -968,65 +968,325 @@ Message: "{user_text}"
 # -------------------------
 # RAG / Chroma helper functions
 # -------------------------
-def rag_query_top_k(user_text, k=5):
+def extract_and_clean_city_name(user_text, existing_city=None):
     """
-    Lấy top-k đoạn văn từ collection vietnam_travel bằng embedding.
-    Trả về list dict và context string.
+    Trích xuất và chuẩn hóa tên thành phố từ câu hỏi người dùng
+    """
+    if existing_city:
+        return existing_city
+    
+    if not client:
+        return None
+    
+    try:
+        prompt = f"""
+Bạn là chuyên gia trích xuất địa danh Việt Nam. 
+Từ câu sau, hãy trích xuất tên thành phố/tỉnh chính xác nhất.
+Chỉ trả về tên địa điểm, không thêm gì khác.
+
+Câu: "{user_text}"
+
+Ví dụ:
+- "thời tiết đà nẵng" -> "Đà Nẵng"
+- "ăn gì ở nha trang" -> "Nha Trang" 
+- "du lịch phú quốc" -> "Phú Quốc"
+"""
+        response = client.chat.completions.create(
+            model=DEPLOYMENT_NAME,
+            messages=[{"role": "system", "content": prompt}],
+            max_tokens=50,
+            temperature=0
+        )
+        city = response.choices[0].message.content.strip()
+        
+        # Chuẩn hóa tên thành phố phổ biến
+        city_mapping = {
+            "hanoi": "Hà Nội", "hà nội": "Hà Nội",
+            "danang": "Đà Nẵng", "đà nẵng": "Đà Nẵng", "da nang": "Đà Nẵng",
+            "ho chi minh": "Hồ Chí Minh", "hồ chí minh": "Hồ Chí Minh", "hcm": "Hồ Chí Minh", "sài gòn": "Hồ Chí Minh",
+            "nha trang": "Nha Trang", "nha trang": "Nha Trang",
+            "da lat": "Đà Lạt", "đà lạt": "Đà Lạt",
+            "hoi an": "Hội An", "hội an": "Hội An",
+            "hue": "Huế", "huế": "Huế",
+            "sapa": "Sa Pa", "sa pa": "Sa Pa",
+            "phu quoc": "Phú Quốc", "phú quốc": "Phú Quốc",
+            "ha long": "Hạ Long", "hạ long": "Hạ Long",
+            "ninh binh": "Ninh Bình", "ninh bình": "Ninh Bình"
+        }
+        
+        city_lower = city.lower().strip()
+        return city_mapping.get(city_lower, city)
+        
+    except Exception as e:
+        print(f"[WARN] Lỗi trích xuất thành phố: {e}")
+        return None
+
+def rag_query_top_k_enhanced(user_text, k=5, target_city=None):
+    """
+    Phiên bản cải tiến của RAG query - tập trung vào địa điểm
     """
     if chroma_travel_col is None or client is None:
         return [], ""
-    emb = get_embedding_local(user_text)  # ĐÃ THAY ĐỔI: dùng embedding local
+    
+    # Tạo query text được tối ưu cho tìm kiếm địa điểm
+    enhanced_query = user_text
+    if target_city:
+        enhanced_query = f"{target_city} {user_text}"
+    
+    emb = get_embedding_local(enhanced_query)
     if emb is None:
         return [], ""
+    
     try:
-        res = chroma_travel_col.query(query_embeddings=[emb], n_results=k, include=["documents","metadatas","distances"])
-        docs = []
+        # THỬ NGHIỆM: Query thông thường trước
+        res_normal = chroma_travel_col.query(
+            query_embeddings=[emb],
+            n_results=k * 3,  # Lấy nhiều hơn để lọc sau
+            include=["documents", "metadatas", "distances"]
+        )
+        all_results = process_chroma_results(res_normal)
         
-        # FIX: Properly handle ChromaDB response structure
-        docs_texts = res.get("documents", [[]])
-        if docs_texts and isinstance(docs_texts, list):
-            docs_texts = docs_texts[0] if docs_texts and isinstance(docs_texts[0], list) else docs_texts
+        # LỌC BẰNG CODE: Ưu tiên kết quả có thành phố khớp
+        if target_city and all_results:
+            filtered_results = []
+            other_results = []
             
-        metadatas = res.get("metadatas", [[]])
-        if metadatas and isinstance(metadatas, list):
-            metadatas = metadatas[0] if metadatas and isinstance(metadatas[0], list) else metadatas
+            # Chuẩn hóa tên thành phố để so sánh
+            target_city_clean = clean_city_name(target_city)
             
-        ids = res.get("ids", [[]])
-        if ids and isinstance(ids, list):
-            ids = ids[0] if ids and isinstance(ids[0], list) else ids
+            for result in all_results:
+                meta = result.get("metadata", {})
+                doc_city = meta.get("city", "")
+                doc_city_clean = clean_city_name(doc_city)
+                
+                # Kiểm tra khớp thành phố
+                city_match = (
+                    doc_city_clean and 
+                    target_city_clean and
+                    (target_city_clean in doc_city_clean or 
+                     doc_city_clean in target_city_clean or
+                     are_cities_similar(target_city_clean, doc_city_clean))
+                )
+                
+                if city_match:
+                    filtered_results.append(result)
+                else:
+                    other_results.append(result)
             
-        distances = res.get("distances", [[]])
-        if distances and isinstance(distances, list):
-            distances = distances[0] if distances and isinstance(distances[0], list) else distances
+            # Kết hợp: ưu tiên kết quả khớp thành phố trước
+            final_results = filtered_results + other_results
+            final_results = final_results[:k]
+            
+            print(f"🔍 RAG Search: '{user_text}' -> '{target_city}'")
+            print(f"📊 Kết quả: {len(all_results)} docs total, {len(filtered_results)} city matches")
+            
+        else:
+            final_results = all_results[:k]
+            print(f"🔍 RAG Search: '{user_text}' (no city filter)")
+        
+        # Tạo context từ kết quả đã lọc
+        context_parts = []
+        city_match_count = 0
+        
+        for doc in final_results:
+            meta = doc.get("metadata", {})
+            doc_city = meta.get("city", "")
+            doc_city_clean = clean_city_name(doc_city)
+            target_city_clean = clean_city_name(target_city)
+            
+            # Đánh giá khớp thành phố
+            city_match = (
+                doc_city_clean and 
+                target_city_clean and
+                (target_city_clean in doc_city_clean or 
+                 doc_city_clean in target_city_clean or
+                 are_cities_similar(target_city_clean, doc_city_clean))
+            )
+            
+            if city_match:
+                city_match_count += 1
+                match_indicator = "🎯"
+            else:
+                match_indicator = "📄"
+            
+            source_info = f"[{match_indicator}]"
+            context_parts.append(f"{source_info} {doc['text'][:1000]}")
+        
+        context = "\n\n".join(context_parts)
+        
+        st.session_state["last_rag_docs"] = final_results
+        return final_results, context
+        
+    except Exception as e:
+        print(f"[WARN] Lỗi truy vấn RAG nâng cao: {e}")
+        return [], ""
 
-        # Ensure all are lists and have same length
-        docs_texts = docs_texts or []
-        metadatas = metadatas or [{}] * len(docs_texts)
-        ids = ids or [f"doc_{i}" for i in range(len(docs_texts))]
-        distances = distances or [None] * len(docs_texts)
+def clean_city_name(city_name):
+    """
+    Chuẩn hóa tên thành phố để so sánh
+    """
+    if not city_name:
+        return ""
+    
+    # Chuyển về chữ thường, bỏ dấu, bỏ khoảng trắng thừa
+    cleaned = city_name.lower().strip()
+    
+    # Bỏ dấu tiếng Việt
+    cleaned = (cleaned
+              .replace('đ', 'd')
+              .replace('à', 'a').replace('á', 'a').replace('ả', 'a').replace('ã', 'a').replace('ạ', 'a')
+              .replace('è', 'e').replace('é', 'e').replace('ẻ', 'e').replace('ẽ', 'e').replace('ẹ', 'e')
+              .replace('ì', 'i').replace('í', 'i').replace('ỉ', 'i').replace('ĩ', 'i').replace('ị', 'i')
+              .replace('ò', 'o').replace('ó', 'o').replace('ỏ', 'o').replace('õ', 'o').replace('ọ', 'o')
+              .replace('ù', 'u').replace('ú', 'u').replace('ủ', 'u').replace('ũ', 'u').replace('ụ', 'u')
+              .replace('ỳ', 'y').replace('ý', 'y').replace('ỷ', 'y').replace('ỹ', 'y').replace('ỵ', 'y'))
+    
+    # Loại bỏ các từ không cần thiết
+    cleaned = (cleaned
+              .replace('thành phố', '')
+              .replace('tp.', '')
+              .replace('tp', '')
+              .replace('thị xã', '')
+              .replace('tỉnh', '')
+              .strip())
+    
+    return cleaned
 
-        for i, txt in enumerate(docs_texts):
+def are_cities_similar(city1, city2):
+    """
+    Kiểm tra xem hai tên thành phố có tương tự nhau không
+    """
+    if not city1 or not city2:
+        return False
+    
+    # Các cặp thành phố thường bị nhầm lẫn
+    similar_pairs = [
+        ('danang', 'da nang'),
+        ('hoian', 'hoi an'),
+        ('hanoi', 'ha noi'),
+        ('hcm', 'ho chi minh'),
+        ('saigon', 'ho chi minh'),
+        ('nhatrang', 'nha trang'),
+        ('dalat', 'da lat'),
+        ('halong', 'ha long'),
+        ('ninbinh', 'ninh binh'),
+        ('phuquoc', 'phu quoc'),
+    ]
+    
+    for pair in similar_pairs:
+        if (city1 in pair and city2 in pair):
+            return True
+    
+    return False
+
+def process_chroma_results(res):
+    """
+    Xử lý kết quả từ ChromaDB response - BẢN SỬA LỖI
+    """
+    docs = []
+    
+    try:
+        # DEBUG: In ra cấu trúc response để kiểm tra
+        print(f"🔍 [DEBUG] Chroma response keys: {list(res.keys())}")
+        
+        # Xử lý documents
+        docs_texts = res.get("documents", [])
+        if docs_texts and isinstance(docs_texts, list) and len(docs_texts) > 0:
+            if isinstance(docs_texts[0], list):
+                docs_texts = docs_texts[0]
+        else:
+            docs_texts = []
+        
+        # Xử lý metadatas
+        metadatas = res.get("metadatas", [])
+        if metadatas and isinstance(metadatas, list) and len(metadatas) > 0:
+            if isinstance(metadatas[0], list):
+                metadatas = metadatas[0]
+        else:
+            metadatas = [{}] * len(docs_texts)
+        
+        # Xử lý ids
+        ids = res.get("ids", [])
+        if ids and isinstance(ids, list) and len(ids) > 0:
+            if isinstance(ids[0], list):
+                ids = ids[0]
+        else:
+            ids = [f"doc_{i}" for i in range(len(docs_texts))]
+        
+        # Xử lý distances
+        distances = res.get("distances", [])
+        if distances and isinstance(distances, list) and len(distances) > 0:
+            if isinstance(distances[0], list):
+                distances = distances[0]
+        else:
+            distances = [None] * len(docs_texts)
+        
+        print(f"🔍 [DEBUG] Processing {len(docs_texts)} documents")
+        
+        # Tạo danh sách kết quả
+        for i in range(len(docs_texts)):
             meta = metadatas[i] if i < len(metadatas) else {}
             doc_id = ids[i] if i < len(ids) else f"doc_{i}"
             distance = distances[i] if i < len(distances) else None
+            text = docs_texts[i] if i < len(docs_texts) else ""
             
             docs.append({
                 "id": doc_id,
-                "text": txt,
+                "text": text,
                 "metadata": meta,
                 "distance": distance
             })
             
-        context_parts = []
-        for d in docs:
-            src = d["metadata"].get("source", "") if isinstance(d.get("metadata"), dict) else ""
-            context_parts.append(f"[src:{d['id']}{('|' + src) if src else ''}] {d['text'][:1200]}")
-        context = "\n\n".join(context_parts)
-        st.session_state["last_rag_docs"] = docs  # lưu nguồn vào session
-        return docs, context
+            # DEBUG: In thông tin từng document
+            doc_city = meta.get("city", "") if isinstance(meta, dict) else ""
+            print(f"📄 [DEBUG] Doc {i}: id={doc_id}, city='{doc_city}'")
+        
+        return docs
+        
     except Exception as e:
-        print(f"[WARN] chroma query error: {e}")
-        return [], ""
+        print(f"[ERROR] Lỗi xử lý kết quả Chroma: {e}")
+        return []
+
+
+def validate_rag_relevance(docs, target_city, user_text):
+    """
+    Validate độ liên quan của kết quả RAG
+    """
+    if not docs:
+        return False, "Không có dữ liệu liên quan"
+    
+    relevant_count = 0
+    city_keywords = []
+    
+    if target_city:
+        # Tạo các biến thể tên thành phố để tìm kiếm
+        city_variants = [
+            target_city.lower(),
+            target_city.replace(" ", "").lower(),
+            ''.join(char for char in target_city if char.isalnum()).lower()
+        ]
+        city_keywords = [v for v in city_variants if v]
+    
+    user_keywords = user_text.lower().split()
+    
+    for doc in docs:
+        doc_text = doc.get("text", "").lower()
+        meta = doc.get("metadata", {})
+        doc_city = meta.get("city", "").lower() if isinstance(meta, dict) else ""
+        
+        # Kiểm tra khớp thành phố trong metadata
+        city_match = any(city_var in doc_city for city_var in city_keywords) if city_keywords else False
+        
+        # Kiểm tra khớp từ khóa trong nội dung
+        content_match = any(keyword in doc_text for keyword in user_keywords if len(keyword) > 2)
+        
+        if city_match or content_match:
+            relevant_count += 1
+    
+    relevance_ratio = relevant_count / len(docs)
+    is_relevant = relevance_ratio >= 0.3  # Ít nhất 30% kết quả liên quan
+    
+    return is_relevant, f"{relevant_count}/{len(docs)} kết quả liên quan (tỷ lệ: {relevance_ratio:.2f})"
 
 def add_to_memory_collection(text, role="user", city=None, extra_meta=None):
     """
@@ -1530,7 +1790,22 @@ with main_tab:
                                 detected_intent = None
                                 intent_used = None
                         if not detected_intent:
-                            docs, rag_context = rag_query_top_k(user_input, k=5)
+                            # Trích xuất và làm sạch tên thành phố
+                            cleaned_city = extract_and_clean_city_name(user_input, city_guess)
+                            print(f"🎯 [MAIN] Extracted city: '{cleaned_city}' from input: '{user_input}'") 
+
+                            # Sử dụng RAG nâng cao với lọc địa điểm
+                            docs, rag_context = rag_query_top_k_enhanced(user_input, k=5, target_city=cleaned_city)
+                            # Kiểm tra kết quả
+                            if docs:
+                                city_match_count = 0
+                                for doc in docs:
+                                    meta = doc.get("metadata", {})
+                                    doc_city = meta.get("city", "") if isinstance(meta, dict) else ""
+                                    if doc_city and cleaned_city and cleaned_city.lower() in doc_city.lower():
+                                        city_match_count += 1
+                                
+                                print(f"✅ [MAIN] Final: {len(docs)} docs, {city_match_count} city matches")
                             sources_count = len(docs)
                             recent_mem = recall_recent_memories(user_input, k=3)
                             memory_used = len(recent_mem) > 0
@@ -1613,6 +1888,13 @@ with main_tab:
                             # Hiển thị chi tiết các tài liệu RAG
                             if "last_rag_docs" in st.session_state and st.session_state["last_rag_docs"]:
                                 sources = st.session_state["last_rag_docs"]
+                                # Validation độ liên quan
+                                is_relevant, relevance_info = validate_rag_relevance(sources, cleaned_city, user_input)
+                                
+                                st.markdown(f"**🔍 Độ liên quan:** {relevance_info}")
+                                if not is_relevant:
+                                    st.warning("⚠️ Một số kết quả có thể không liên quan trực tiếp đến câu hỏi")
+
                                 with st.expander(f"📖 Chi tiết {len(sources)} tài liệu tham khảo"):
                                     for i, src in enumerate(sources, 1):
                                         meta = src.get("metadata", {}) or {}
@@ -1620,10 +1902,16 @@ with main_tab:
                                         city = meta.get("city", "")
                                         srcname = meta.get("source", "Nội bộ")
                                         distance = src.get("distance")
+
+                                        # Đánh dấu kết quả khớp thành phố
+                                        city_match = cleaned_city and city and cleaned_city.lower() in city.lower()
+                                        match_indicator = "🎯" if city_match else "📄"
                                         
-                                        st.markdown(f"**{i}. {title}**")
+                                        st.markdown(f"**{i}. {match_indicator} {title}**")
+                                        print(city, cleaned_city, city_match)
+
                                         if city:
-                                            st.caption(f"📍 {city}")
+                                            st.caption(f"📍 {city} {'(KHỚP)' if city_match else ''}")
                                         if srcname:
                                             st.caption(f"📚 Nguồn: {srcname}")
                                         if distance is not None:
